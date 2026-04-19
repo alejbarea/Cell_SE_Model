@@ -15,6 +15,7 @@ struct SimulationParameters <: Parameters
     cell_soft_radius::Float64
     internal_cohesion_strength::Float64
     maximal_stretch::Float64
+    run_speed::Float64
 end
 
 struct DomainSpecs <: Parameters
@@ -57,7 +58,7 @@ function initialize_cell_collective(p::SimulationParameters, domain::DomainSpecs
         forcestop[i] = SVector(0.0, 0.0)
         state[i] = rand(Bool) ? 1 : 0 # Random initial state
         state_timer[i] = rand(Exponential(1.0)) # Random initial timer for state transitions
-        run_speeds[i] = rand() * 2.0 # Random speed between 0 and 2 for running state
+        run_speeds[i] = p.run_speed # Random speed between 0 and p.run_speed for running state
     end
     return CellCollective(bottom, top, theta, thetabar, neighbours, forcesbottom, forcestop, state, state_timer, run_speeds)
 end
@@ -139,8 +140,8 @@ function compute_cell_cohesion_forces!(collective::CellCollective, p::Simulation
             collective.forcesbottom[i] += p.internal_cohesion_strength * (internal_distance - 2 * p.cell_hard_radius) * unit_vector_to_top
             collective.forcestop[i] -= p.internal_cohesion_strength * (internal_distance - 2 * p.cell_hard_radius) * unit_vector_to_top
         else
-            collective.top[i] -= (unit_vector_to_top * (internal_distance - p.maximal_stretch)) / 2
-            collective.bottom[i] += (unit_vector_to_top * (internal_distance - p.maximal_stretch)) / 2
+            collective.top[i] -= (unit_vector_to_top * (internal_distance - p.maximal_stretch)) 
+            #collective.bottom[i] += (unit_vector_to_top * (internal_distance - p.maximal_stretch)) / 2
         end
     end
 end
@@ -176,6 +177,7 @@ function read_parameters(filename::String)
         Float64(_toml_value(parameters, "cell_soft_radius")),
         Float64(_toml_value(parameters, "internal_cohesion_strength")),
         Float64(_toml_value(parameters, "maximal_stretch")),
+        Float64(_toml_value(parameters, "run_speed"))
     )
 
     domain_specs = DomainSpecs(
