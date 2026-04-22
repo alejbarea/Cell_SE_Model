@@ -1,3 +1,6 @@
+using DrWatson
+@quickactivate "Cell_SE_Model"
+
 include(srcdir("simulation_logic.jl"))
 
 solution = simulation_loop()
