@@ -19,7 +19,10 @@ function animate_solution(solution, p, domain, output_path)
     bottom_obs = Observable(solution.bottom[1])
     top_obs    = Observable(solution.top[1])
     state_obs  = Observable(solution.state[1])
+    theta_obs  = Observable(solution.theta[1])
 
+    # Compute arrow directions from theta angles
+    arrow_directions = @lift(Point2f.(p.cell_soft_radius .* cos.($theta_obs), p.cell_soft_radius .* sin.($theta_obs)))
     color_mask = state_obs[] .== 1
     soft_colors = RGBAf.(0, 1, 0, 0.3) .* color_mask + RGBAf.(1, 0, 0, 0.3) .* .!color_mask
     soft_colors_obs = Observable(soft_colors)
@@ -28,6 +31,9 @@ function animate_solution(solution, p, domain, output_path)
 
     scatter!(ax, bottom_obs, color = :blue, markersize = 2*p.cell_hard_radius, marker = Makie.Circle,markerspace=:data)
     scatter!(ax, top_obs, color = :red, markersize = 2*p.cell_hard_radius, marker = Makie.Circle,markerspace=:data)
+    
+    # Add arrows showing direction (theta angle) at each cell's bottom position
+    arrows2d!(ax, bottom_obs, arrow_directions, shaftwidth = 2, shaftlength = 2, color = :black)
     #=
     scatter!(ax2, bottom_obs, color = soft_colors_obs, markersize = 2*p.cell_soft_radius, marker = Makie.Circle,markerspace=:data)
     scatter!(ax3, top_obs, color = soft_colors_obs, markersize = 2*p.cell_soft_radius, marker = Makie.Circle,markerspace=:data)
@@ -46,6 +52,7 @@ function animate_solution(solution, p, domain, output_path)
             bottom_obs[] = solution.bottom[step]
             top_obs[]    = solution.top[step]
             state_obs[]  = solution.state[step]
+            theta_obs[]  = solution.theta[step]
 
              # update colors
             color_mask = state_obs[] .== 1

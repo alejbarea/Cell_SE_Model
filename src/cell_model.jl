@@ -18,6 +18,15 @@ struct SimulationParameters <: Parameters
     top_internal_pull_strength::Float64
     soft_boundary_potential_strength::Float64
     bottom_internal_pull_strength::Float64
+    top_morse_u0::Float64
+    top_morse_v0::Float64
+    top_morse_xi1::Float64
+    top_morse_xi2::Float64
+    top_morse_cutoff::Float64
+    bottom_morse_u0::Float64
+    bottom_morse_v0::Float64
+    bottom_morse_xi1::Float64
+    bottom_morse_xi2::Float64
 end
 
 struct DomainSpecs <: Parameters
@@ -31,41 +40,47 @@ struct CellCollective
     bottom::Vector{SVector{2, Float64}} # Coordinates of cell centers at z = 0
     top::Vector{SVector{2, Float64}} # Coordinates of cell centers at z = z0
     theta::Vector{Float64} # Cell angles
-    thetabar::Vector{Float64} # Cell desired polarity angles
-    neighbours::Vector{Vector{Int}} # Neighbouring cell indices
+    thetabar::Vector{SVector{2, Float64}} # Cell desired polarity vectors
+    neighboursbottom::Vector{Vector{Int}} # Neighbouring cell indices
+    neighbourstop::Vector{Vector{Int}} # Neighbouring cell indices
     forcesbottom::Vector{SVector{2, Float64}} # Forces on each cell at z = 0
     forcestop::Vector{SVector{2, Float64}} # Forces on each cell at z = z0
     state::Vector{Int} # State of each cell (e.g., 0 for tumbling, 1 for running)
     state_timer::Vector{Float64} # Timer for state transitions
     run_speeds::Vector{Float64} # Speed of each cell when in the running state
+    hitting_wall::Vector{Bool} # Whether each cell is currently hitting a wall
 end
 
 function initialize_cell_collective(p::SimulationParameters, domain::DomainSpecs)
     bottom = Vector{SVector{2, Float64}}(undef, p.num_cells)
     top = Vector{SVector{2, Float64}}(undef, p.num_cells)
     theta = Vector{Float64}(undef, p.num_cells)
-    thetabar = Vector{Float64}(undef, p.num_cells)
-    neighbours = Vector{Vector{Int}}(undef, p.num_cells)
+    thetabar = Vector{SVector{2, Float64}}(undef, p.num_cells)
+    neighboursbottom = Vector{Vector{Int}}(undef, p.num_cells)
+    neighbourstop = Vector{Vector{Int}}(undef, p.num_cells)
     forcesbottom = Vector{SVector{2, Float64}}(undef, p.num_cells)
     forcestop = Vector{SVector{2, Float64}}(undef, p.num_cells)
     state = Vector{Int}(undef, p.num_cells)
     state_timer = Vector{Float64}(undef, p.num_cells)
     run_speeds = Vector{Float64}(undef, p.num_cells)
+    hitting_wall = Vector{Bool}(undef, p.num_cells)
     for i in 1:p.num_cells
         bottom[i] = SVector(rand() * domain.domain_width, rand() * domain.domain_height)
         theta[i] = rand() * 2 * pi # Random initial angle
         top[i] = bottom[i] - p.cell_hard_radius * SVector(cos(theta[i]), sin(theta[i])) # Initial top position directly above bottom
-        thetabar[i] = theta[i] # Initial desired angle same as initial angle
+        thetabar[i] = SVector(cos(theta[i]), sin(theta[i])) # Initial desired angle same as initial angle
         forcesbottom[i] = SVector(0.0, 0.0)
         forcestop[i] = SVector(0.0, 0.0)
         rand_aux = rand()  
         time_quot = p.tumble_to_run_rate / (p.tumble_to_run_rate + p.run_to_tumble_rate)      
         state[i] = rand_aux < time_quot ? 1 : 0 # Random initial state
         state_timer[i] = rand(Exponential(1.0)) # Random initial timer for state transitions
-        run_speeds[i] = p.run_speed 
-        neighbours[i] = []
+        run_speeds[i] = p.run_speed
+        neighboursbottom[i] = []
+        neighbourstop[i] = []
+        hitting_wall[i] = false
     end
-    return CellCollective(bottom, top, theta, thetabar, neighbours, forcesbottom, forcestop, state, state_timer, run_speeds)
+    return CellCollective(bottom, top, theta, thetabar, neighboursbottom, neighbourstop, forcesbottom, forcestop, state, state_timer, run_speeds, hitting_wall)
 end
 
 
@@ -74,15 +89,23 @@ function update_cell_collective!(collective::CellCollective, p::SimulationParame
     # Update bottom and top coordinates
     collective.bottom .+= p.dt .* collective.forcesbottom
     collective.top .+= p.dt .* collective.forcestop
-    neighbour_mask = length.(collective.neighbours) .== 0    
-    collective.thetabar[neighbour_mask] .= collective.theta[neighbour_mask]
-    # Update theta only where state == 0
+    neighbour_mask = (length.(collective.neighboursbottom) .== 0) .& (collective.hitting_wall .== false)
+    collective.thetabar[neighbour_mask] .= SVector.(cos.(collective.theta[neighbour_mask]), sin.(collective.theta[neighbour_mask]))    # Update theta only where state == 0
     mask = collective.state .== 0
-    collective.theta[mask] .+= -p.theta_alignment .* sin.(collective.theta[mask] - collective.thetabar[mask]) .* p.dt + sqrt(2 * p.D_angle * p.dt) .* randn(sum(mask))
+    thetabar_angle_conversion = atan.(getindex.(collective.thetabar, 2), getindex.(collective.thetabar, 1))
+    collective.theta[mask] .+= -p.theta_alignment .* sin.(collective.theta[mask] - thetabar_angle_conversion[mask]) .* p.dt + sqrt(2 * p.D_angle * p.dt) .* randn(sum(mask))
     collective.bottom[.!mask] .+= collective.run_speeds[.!mask] * p.dt .* SVector.(cos.(collective.theta[.!mask]), sin.(collective.theta[.!mask])) 
     fill!(collective.forcesbottom, SVector(0.0, 0.0))
     fill!(collective.forcestop,    SVector(0.0, 0.0))
+    fill!(collective.neighboursbottom, Int[])
+    fill!(collective.neighbourstop, Int[])
+    fill!(collective.thetabar, SVector(0.0, 0.0))
+    fill!(collective.hitting_wall, false)
 end
+
+
+
+
 function compute_interaction_forces!(collective::CellCollective, p::SimulationParameters)
     for i in 1:p.num_cells
         for j in i+1:p.num_cells
@@ -90,17 +113,33 @@ function compute_interaction_forces!(collective::CellCollective, p::SimulationPa
             distance_vector_top = collective.top[i] - collective.top[j]
             distance_bottom = norm(distance_vector_bottom)
             distance_top = norm(distance_vector_top)
+            unit_vector_bottom = distance_vector_bottom / distance_bottom
+            unit_vector_top = distance_vector_top / distance_top
             if distance_bottom < 2 * p.cell_hard_radius
+                push!(collective.neighboursbottom[i], j)
+                push!(collective.neighboursbottom[j], i)
                 force_magnitude = (2 * p.cell_hard_radius - distance_bottom)
                 force_direction = distance_vector_bottom / distance_bottom
                 collective.bottom[i] += force_magnitude * force_direction / 2
                 collective.bottom[j] -= force_magnitude * force_direction / 2
+                collective.thetabar[i] += unit_vector_bottom
+                collective.thetabar[j] -= unit_vector_bottom
+            elseif distance_bottom < 2 * p.cell_soft_radius
+                push!(collective.neighboursbottom[i], j)
+                push!(collective.neighboursbottom[j], i)
+                collective.thetabar[i] += unit_vector_bottom
+                collective.thetabar[j] -= unit_vector_bottom
             end
             if distance_top < 2 * p.cell_hard_radius
+                push!(collective.neighbourstop[i], j)
+                push!(collective.neighbourstop[j], i)
                 force_magnitude = (2 * p.cell_hard_radius - distance_top)
                 force_direction = distance_vector_top / distance_top
                 collective.top[i] += force_magnitude * force_direction / 2
                 collective.top[j] -= force_magnitude * force_direction / 2
+            elseif distance_top < 2 * p.cell_soft_radius
+                push!(collective.neighbourstop[i], j)
+                push!(collective.neighbourstop[j], i)
             end
         end
     end
@@ -136,17 +175,25 @@ function apply_hard_wall_boundary_conditions!(collective::CellCollective, domain
     for i in eachindex(collective.bottom)
         if collective.bottom[i][1] < p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], p.cell_hard_radius, 1)
-            collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            #collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(1,0) # Align to the right
         elseif collective.bottom[i][1] > domain.domain_width - p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], 2*(domain.domain_width - p.cell_hard_radius) - collective.bottom[i][1], 1)
-            collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            #collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(-1,0) # Align to the left
         end
         if collective.bottom[i][2] < p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], p.cell_hard_radius, 2)
-            collective.theta[i] = -collective.theta[i] # Reflect angle
+            #collective.theta[i] = -collective.theta[i] # Reflect angle
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(0,1) # Align to the top
         elseif collective.bottom[i][2] > domain.domain_height - p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], 2*(domain.domain_height - p.cell_hard_radius) - collective.bottom[i][2], 2)
-            collective.theta[i] = -collective.theta[i] # Reflect angle
+            #collective.theta[i] = -collective.theta[i] # Reflect angle
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(0,-1) # Align to the bottom
         end
         if collective.top[i][1] < p.cell_hard_radius
             collective.top[i] = setindex(collective.top[i], p.cell_hard_radius, 1)
@@ -167,16 +214,24 @@ function compute_soft_wall_forces!(collective::CellCollective, domain::DomainSpe
         if collective.bottom[i][1] < p.cell_soft_radius
             force_magnitude = p.soft_boundary_potential_strength*(p.cell_soft_radius - collective.bottom[i][1])
             collective.forcesbottom[i] += SVector(force_magnitude, 0.0)
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(1,0) # Align to the right
         elseif collective.bottom[i][1] > domain.domain_width - p.cell_soft_radius
             force_magnitude = p.soft_boundary_potential_strength*(collective.bottom[i][1] - (domain.domain_width - p.cell_soft_radius))
             collective.forcesbottom[i] -= SVector(force_magnitude, 0.0)
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(-1,0)
         end
         if collective.bottom[i][2] < p.cell_soft_radius
             force_magnitude = p.soft_boundary_potential_strength*(p.cell_soft_radius - collective.bottom[i][2])
             collective.forcesbottom[i] += SVector(0.0, force_magnitude)
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(0,1)
         elseif collective.bottom[i][2] > domain.domain_height - p.cell_soft_radius
             force_magnitude = p.soft_boundary_potential_strength*(collective.bottom[i][2] - (domain.domain_height - p.cell_soft_radius))
             collective.forcesbottom[i] -= SVector(0.0, force_magnitude)
+            collective.hitting_wall[i] = true
+            collective.thetabar[i] += SVector(0,-1)
         end
         if collective.top[i][1] < p.cell_soft_radius
             force_magnitude = p.soft_boundary_potential_strength*(p.cell_soft_radius - collective.top[i][1])
@@ -200,14 +255,16 @@ function compute_cell_cohesion_forces!(collective::CellCollective, p::Simulation
         vector_to_top = collective.top[i] - collective.bottom[i]
         
         internal_distance = norm(vector_to_top)
-        unit_vector_to_top = vector_to_top / internal_distance
-        if internal_distance < p.maximal_stretch
-            #internal_cohesion_force = (p.top_internal_pull_strength/p.bottom_internal_pull_strength * exp(-(internal_distance-2*p.cell_hard_radius)/p.bottom_internal_pull_strength) - p.soft_boundary_potential_strength/p.morse_potential_xi2 * exp(-(internal_distance-p.cell_hard_radius)/p.morse_potential_xi2)) * unit_vector_to_top
-            collective.forcestop[i] -= p.top_internal_pull_strength*internal_distance*unit_vector_to_top
-            collective.forcesbottom[i] += p.bottom_internal_pull_strength*internal_distance*unit_vector_to_top
-        else
-            collective.top[i] -= (unit_vector_to_top * (internal_distance - p.maximal_stretch)) / 2
-            collective.bottom[i] += (unit_vector_to_top * (internal_distance - p.maximal_stretch)) / 2
+        if internal_distance > eps()
+            unit_vector_to_top = vector_to_top / internal_distance
+            if internal_distance < p.maximal_stretch
+                #internal_cohesion_force = (p.top_internal_pull_strength/p.bottom_internal_pull_strength * exp(-(internal_distance-2*p.cell_hard_radius)/p.bottom_internal_pull_strength) - p.soft_boundary_potential_strength/p.morse_potential_xi2 * exp(-(internal_distance-p.cell_hard_radius)/p.morse_potential_xi2)) * unit_vector_to_top
+                collective.forcestop[i] -= p.top_internal_pull_strength*internal_distance*unit_vector_to_top
+                collective.forcesbottom[i] += p.bottom_internal_pull_strength*internal_distance*unit_vector_to_top
+            else
+                collective.top[i] -= (unit_vector_to_top * (internal_distance - p.maximal_stretch)) / 2
+                collective.bottom[i] += (unit_vector_to_top * (internal_distance - p.maximal_stretch)) / 2
+            end
         end
     end
 end
@@ -246,6 +303,15 @@ function read_parameters(filename::String)
         Float64(_toml_value(parameters, "top_internal_pull_strength")),
         Float64(_toml_value(parameters, "soft_boundary_potential_strength")),
         Float64(_toml_value(parameters, "bottom_internal_pull_strength")),
+        Float64(_toml_value(parameters, "top_morse_u0")),
+        Float64(_toml_value(parameters, "top_morse_v0")),
+        Float64(_toml_value(parameters, "top_morse_xi1")),
+        Float64(_toml_value(parameters, "top_morse_xi2")),
+        Float64(_toml_value(parameters, "top_morse_cutoff")),
+        Float64(_toml_value(parameters, "bottom_morse_u0")),
+        Float64(_toml_value(parameters, "bottom_morse_v0")),
+        Float64(_toml_value(parameters, "bottom_morse_xi1")),
+        Float64(_toml_value(parameters, "bottom_morse_xi2")),
 
     )
 
