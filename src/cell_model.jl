@@ -184,7 +184,6 @@ function compute_state_changes!(collective::CellCollective, p::SimulationParamet
                 cos35 = cos(35 * pi / 180)
                 speed_direction = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
                 dot_product = dot(unit_vector_bottom, speed_direction)
-                print(p.cil_intensity * (atan((dot_product - cos35) / 0.00001) + pi/2))
                 run_to_tumble_rate += p.cil_intensity * (atan((dot_product - cos35) / 0.00001) + pi/2)
             end
             collective.state_timer[i] -= p.dt * run_to_tumble_rate

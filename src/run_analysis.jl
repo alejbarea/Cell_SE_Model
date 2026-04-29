@@ -1,6 +1,9 @@
 using DrWatson
 include(srcdir("simulation_logic.jl"))
 
+
+
+
 struct AnalysisResults
     mean_speeds_bottom::Vector{Float64}
     mean_speeds_top::Vector{Float64}
@@ -8,6 +11,7 @@ struct AnalysisResults
     group_speeds_top::Vector{Float64}
     mean_theta::Vector{Float64}
 end
+
 
 function run_analysis_from_simulation()
     solution, p, domain = simulation_loop()
@@ -28,6 +32,16 @@ function run_analysis_from_csv(solution_dir = datadir("sims"), solution_file = "
 
     return AnalysisResults(mean_speeds_bottom, mean_speeds_top, group_speeds_bottom, group_speeds_top, mean_theta)
 end
+
+function run_analysis_from_solution(solution::Solution, p::Parameters)
+    mean_speeds_bottom, mean_speeds_top = compute_mean_speed(solution, p)
+    group_speeds_bottom, group_speeds_top = compute_group_speed(solution, p)
+    mean_theta = compute_mean_theta(solution, p)
+
+    return AnalysisResults(mean_speeds_bottom, mean_speeds_top, group_speeds_bottom, group_speeds_top, mean_theta)
+end
+
+
 
 function compute_mean_speed(solution::Solution, p::Parameters)
     num_steps = length(solution.bottom)
