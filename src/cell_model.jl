@@ -18,15 +18,7 @@ struct SimulationParameters <: Parameters
     top_internal_pull_strength::Float64
     soft_boundary_potential_strength::Float64
     bottom_internal_pull_strength::Float64
-    top_morse_u0::Float64
-    top_morse_v0::Float64
-    top_morse_xi1::Float64
-    top_morse_xi2::Float64
-    top_morse_cutoff::Float64
-    bottom_morse_u0::Float64
-    bottom_morse_v0::Float64
-    bottom_morse_xi1::Float64
-    bottom_morse_xi2::Float64
+    cil_intensity::Float64
 end
 
 struct DomainSpecs <: Parameters
@@ -34,6 +26,13 @@ struct DomainSpecs <: Parameters
     domain_height::Float64
 end
 
+struct MorsePotential <: Parameters
+    u0::Float64
+    v0::Float64
+    xi1::Float64
+    xi2::Float64
+    cutoff::Float64
+end
 
 # Cell Collective Structure is a collection of all cell data for easy vectorization.
 struct CellCollective
@@ -97,16 +96,23 @@ function update_cell_collective!(collective::CellCollective, p::SimulationParame
     collective.bottom[.!mask] .+= collective.run_speeds[.!mask] * p.dt .* SVector.(cos.(collective.theta[.!mask]), sin.(collective.theta[.!mask])) 
     fill!(collective.forcesbottom, SVector(0.0, 0.0))
     fill!(collective.forcestop,    SVector(0.0, 0.0))
-    fill!(collective.neighboursbottom, Int[])
-    fill!(collective.neighbourstop, Int[])
+    empty!.(collective.neighboursbottom)
+    empty!.(collective.neighbourstop)
     fill!(collective.thetabar, SVector(0.0, 0.0))
     fill!(collective.hitting_wall, false)
 end
 
 
+function morse_interaction_forces(potential::MorsePotential, unit_vector::SVector{2, Float64}, distance::Float64)
+    if distance > eps()
+        force_magnitude = (potential.u0 * exp(-distance / potential.xi1) - potential.v0 * exp(-distance / potential.xi2))
+        return force_magnitude * unit_vector
+    else
+        return SVector(0.0, 0.0)
+    end
+end
 
-
-function compute_interaction_forces!(collective::CellCollective, p::SimulationParameters)
+function compute_interaction_forces!(collective::CellCollective, p::SimulationParameters, morse_potential_top::MorsePotential, morse_potential_bottom::MorsePotential)
     for i in 1:p.num_cells
         for j in i+1:p.num_cells
             distance_vector_bottom = collective.bottom[i] - collective.bottom[j]
@@ -141,6 +147,14 @@ function compute_interaction_forces!(collective::CellCollective, p::SimulationPa
                 push!(collective.neighbourstop[i], j)
                 push!(collective.neighbourstop[j], i)
             end
+            if distance_top < morse_potential_top.cutoff && distance_top > 2 * p.cell_hard_radius
+                force_top = morse_interaction_forces(morse_potential_top, unit_vector_top, distance_top - 2*p.cell_hard_radius)
+                collective.forcestop[i] += force_top / 2
+                collective.forcestop[j] -= force_top / 2
+            end
+            force_bottom = morse_interaction_forces(morse_potential_bottom, unit_vector_bottom, distance_bottom - 2*p.cell_soft_radius)
+            collective.forcesbottom[i] += force_bottom / 2
+            collective.forcesbottom[j] -= force_bottom / 2
         end
     end
 end
@@ -156,7 +170,30 @@ function compute_stochastic_forces!(collective::CellCollective, p::SimulationPar
 end
 
 function compute_state_changes!(collective::CellCollective, p::SimulationParameters)
-    collective.state_timer .-= p.dt*((1 .- collective.state) .* p.tumble_to_run_rate .+ collective.state .* p.run_to_tumble_rate)
+    tumble_to_run_rate = p.tumble_to_run_rate
+    run_to_tumble_rate = p.run_to_tumble_rate
+
+    #collective.state_timer .-= p.dt*((1 .- collective.state) .* tumble_to_run_rate .+ collective.state .* run_to_tumble_rate)
+    for i in 1:p.num_cells
+        run_to_tumble_rate = p.run_to_tumble_rate
+        if collective.state[i] == 1
+            for j in collective.neighboursbottom[i]
+                distance_vector_bottom = collective.bottom[j] - collective.bottom[i]
+                distance_bottom = norm(distance_vector_bottom)
+                unit_vector_bottom = distance_vector_bottom / distance_bottom
+                cos35 = cos(35 * pi / 180)
+                speed_direction = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
+                dot_product = dot(unit_vector_bottom, speed_direction)
+                print(p.cil_intensity * (atan((dot_product - cos35) / 0.00001) + pi/2))
+                run_to_tumble_rate += p.cil_intensity * (atan((dot_product - cos35) / 0.00001) + pi/2)
+            end
+            collective.state_timer[i] -= p.dt * run_to_tumble_rate
+                
+        else
+            collective.state_timer[i] -= p.dt * tumble_to_run_rate
+        end
+    end
+    
     # Check for state transitions
     mask = collective.state_timer .<= 0
     collective.state[mask] .= 1 .- collective.state[mask] # Toggle state
@@ -303,16 +340,7 @@ function read_parameters(filename::String)
         Float64(_toml_value(parameters, "top_internal_pull_strength")),
         Float64(_toml_value(parameters, "soft_boundary_potential_strength")),
         Float64(_toml_value(parameters, "bottom_internal_pull_strength")),
-        Float64(_toml_value(parameters, "top_morse_u0")),
-        Float64(_toml_value(parameters, "top_morse_v0")),
-        Float64(_toml_value(parameters, "top_morse_xi1")),
-        Float64(_toml_value(parameters, "top_morse_xi2")),
-        Float64(_toml_value(parameters, "top_morse_cutoff")),
-        Float64(_toml_value(parameters, "bottom_morse_u0")),
-        Float64(_toml_value(parameters, "bottom_morse_v0")),
-        Float64(_toml_value(parameters, "bottom_morse_xi1")),
-        Float64(_toml_value(parameters, "bottom_morse_xi2")),
-
+        Float64(_toml_value(parameters, "cil_intensity"))
     )
 
     domain_specs = DomainSpecs(
@@ -320,6 +348,22 @@ function read_parameters(filename::String)
         Float64(_toml_value(parameters, "domain_height")),
     )
 
-    return simulation_parameters, domain_specs
+    morse_potential_top = MorsePotential(
+        Float64(_toml_value(parameters, "top_morse_u0")),
+        Float64(_toml_value(parameters, "top_morse_v0")),
+        Float64(_toml_value(parameters, "top_morse_xi1")),
+        Float64(_toml_value(parameters, "top_morse_xi2")),
+        Float64(_toml_value(parameters, "top_morse_cutoff")),
+    )
+
+    morse_potential_bottom = MorsePotential(
+        Float64(_toml_value(parameters, "bottom_morse_u0")),
+        Float64(_toml_value(parameters, "bottom_morse_v0")),
+        Float64(_toml_value(parameters, "bottom_morse_xi1")),
+        Float64(_toml_value(parameters, "bottom_morse_xi2")),
+        Inf
+    )
+
+    return simulation_parameters, domain_specs, morse_potential_top, morse_potential_bottom
 end
 

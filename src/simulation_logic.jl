@@ -8,14 +8,16 @@ struct Solution
     theta::Vector{Vector{Float64}}
 end
 
-function simulation_init()
-    p, dom = read_parameters(datadir("sims", "parameters.toml"))
+function simulation_init(p = Nothing, dom = Nothing, morse_potential_top = Nothing, morse_potential_bottom = Nothing)
+    if p === Nothing || dom === Nothing || morse_potential_top === Nothing || morse_potential_bottom === Nothing
+        p, dom, morse_potential_top, morse_potential_bottom = read_parameters(datadir("sims", "parameters.toml"))
+    end
     collective = initialize_cell_collective(p, dom)
-    return collective, p, dom
+    return collective, p, dom, morse_potential_top, morse_potential_bottom
 end
 
-function simulation_loop()
-    collective, p, domain = simulation_init()
+function simulation_loop(p = Nothing, dom = Nothing, morse_potential_top = Nothing, morse_potential_bottom = Nothing)
+    collective, p, domain, morse_potential_top, morse_potential_bottom = simulation_init(p, dom, morse_potential_top, morse_potential_bottom)
     num_steps = Int(p.total_time / p.dt)
     solution = Solution(Vector{Vector{SVector{2, Float64}}}(undef, num_steps), Vector{Vector{SVector{2, Float64}}}(undef, num_steps), Vector{Vector{Int}}(undef, num_steps), Vector{Vector{Float64}}(undef, num_steps))
     for step in 1:num_steps
@@ -23,7 +25,7 @@ function simulation_loop()
         solution.top[step] = Vector{SVector{2, Float64}}(undef, p.num_cells)
         solution.state[step] = Vector{Int}(undef, p.num_cells)
         solution.theta[step] = Vector{Float64}(undef, p.num_cells)
-        compute_interaction_forces!(collective, p)
+        compute_interaction_forces!(collective, p, morse_potential_top, morse_potential_bottom)
         compute_stochastic_forces!(collective, p)
         compute_state_changes!(collective,p)
         update_cell_collective!(collective, p)
