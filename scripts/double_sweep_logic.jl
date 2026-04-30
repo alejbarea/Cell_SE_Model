@@ -8,35 +8,45 @@ include(srcdir("simulation_logic.jl"))
 include(srcdir("cell_model.jl"))
 include(srcdir("run_analysis.jl"))
 
-struct SweepParameters
-    sweep_parameter_name::String
-    sweep_init::Float64
-    sweep_step::Float64
-    sweep_stop::Float64
+struct DoubleSweepParameters
+    sweep_parameter_name_one::String
+    sweep_init_one::Float64
+    sweep_step_one::Float64
+    sweep_stop_one::Float64
+    sweep_parameter_name_two::String
+    sweep_init_two::Float64
+    sweep_step_two::Float64
+    sweep_stop_two::Float64
     sweep_repetitions::Int
 end
 
 function read_sweep_parameters(filename::String)
     parameters = TOML.parsefile(filename)
-    return SweepParameters(
-        String(_toml_value(parameters, "sweep_parameter_name")),
-        Float64(_toml_value(parameters, "sweep_init")),
-        Float64(_toml_value(parameters, "sweep_step")),
-        Float64(_toml_value(parameters, "sweep_stop")),
+    return DoubleSweepParameters(
+        String(_toml_value(parameters, "sweep_parameter_name_one")),
+        Float64(_toml_value(parameters, "sweep_init_one")),
+        Float64(_toml_value(parameters, "sweep_step_one")),
+        Float64(_toml_value(parameters, "sweep_stop_one")),
+        String(_toml_value(parameters, "sweep_parameter_name_two")),
+        Float64(_toml_value(parameters, "sweep_init_two")),
+        Float64(_toml_value(parameters, "sweep_step_two")),
+        Float64(_toml_value(parameters, "sweep_stop_two")),
         Int(_toml_value(parameters, "sweep_repetitions"))
     )
 end
 
 # Optimization: Pass the dictionary directly so we only read the file once
-function create_swept_parameters(base_dict::Dict, sweep_param::String, new_val)
+function create_swept_parameters(base_dict::Dict, sweep_param_one::String, new_val_one, sweep_param_two::String, new_val_two)
     # Use deepcopy so we don't accidentally mutate the base template
     parameters_dict = deepcopy(base_dict)
     
     # Overwrite the specific parameter dynamically
-    parameters_dict[sweep_param] = new_val
+    parameters_dict[sweep_param_one] = new_val_one
+    parameters_dict[sweep_param_two] = new_val_two
     
     # Rebuild ALL parameter structures, not just SimulationParameters
-        simulation_parameters = SimulationParameters(
+
+    simulation_parameters = SimulationParameters(
         Int(_toml_value(parameters_dict, "num_cells")),
         Float64(_toml_value(parameters_dict, "dt")),
         Float64(_toml_value(parameters_dict, "total_time")),
@@ -91,34 +101,43 @@ end
 base_toml_dict = TOML.parsefile(datadir("sims", "parameters.toml"))
 
 # 2. Read your sweep logic
-sweep_parameters = read_sweep_parameters(datadir("sims", "sweep_parameters.toml"))
+sweep_parameters = read_sweep_parameters(datadir("sims", "double_sweep_parameters.toml"))
 
 # 3. Initialize a dictionary to store results
 sweep_results = Dict{String, Vector{Float64}}()
-sweep_results["p_value"] = Float64[]
+sweep_results["p_value_one"] = Float64[]
+sweep_results["p_value_two"] = Float64[]
 
 # 4. Execute the sweep
-for p_value in sweep_parameters.sweep_init:sweep_parameters.sweep_step:sweep_parameters.sweep_stop
-    analysis_results_list = AnalysisResults[]
-    for rep in 1:sweep_parameters.sweep_repetitions
-        println("Running simulation with $(sweep_parameters.sweep_parameter_name) = $p_value")
-        
-        # Rebuild all 4 structs with the updated dictionary
-        swept_p, swept_domain, swept_top, swept_bottom = create_swept_parameters(
-            base_toml_dict, 
-            sweep_parameters.sweep_parameter_name, 
-            p_value
-        )
-        
-        # Pass all 4 updated structs to the simulation loop
-        solution, final_p, final_domain = simulation_loop(swept_p, swept_domain, swept_top, swept_bottom)
-        
-        # Run analysis
-        analysis_results = run_analysis_from_solution(solution, final_p)
-        push!(analysis_results_list, analysis_results)
-    end
+for p_value_one in sweep_parameters.sweep_init_one:sweep_parameters.sweep_step_one:sweep_parameters.sweep_stop_one
+    println("Running simulation with $(sweep_parameters.sweep_parameter_name_one) = $p_value_one")
+    for p_value_two in sweep_parameters.sweep_init_two:sweep_parameters.sweep_step_two:sweep_parameters.sweep_stop_two
+        println("Running simulation with $(sweep_parameters.sweep_parameter_name_two) = $p_value_two")
+        analysis_results_list = AnalysisResults[]
+        for rep in 1:sweep_parameters.sweep_repetitions
+            println("Repetition $rep of $(sweep_parameters.sweep_repetitions)")
+            
+            # Rebuild all 4 structs with the updated dictionary
+            swept_p, swept_domain, swept_top, swept_bottom = create_swept_parameters(
+                base_toml_dict, 
+                sweep_parameters.sweep_parameter_name_one, 
+                p_value_one, sweep_parameters.sweep_parameter_name_two, 
+                p_value_two
+            )
+            
+            # Pass all 4 updated structs to the simulation loop
+            solution, final_p, final_domain = simulation_loop(swept_p, swept_domain, swept_top, swept_bottom)
+            
+            # Run analysis
+            analysis_results = run_analysis_from_solution(solution, final_p)
+            
+            # Store results locally for averaging later
+            push!(analysis_results_list, analysis_results)
+        end
+
     # Store p_value
-    push!(sweep_results["p_value"], p_value)
+    push!(sweep_results["p_value_one"], p_value_one)
+    push!(sweep_results["p_value_two"], p_value_two)
     
     # Compute mean for each field in AnalysisResults
     if !haskey(sweep_results, "mean_speeds_bottom")
@@ -143,10 +162,11 @@ for p_value in sweep_parameters.sweep_init:sweep_parameters.sweep_step:sweep_par
     push!(sweep_results["group_speeds_top"], mean(vcat([r.group_speeds_top for r in analysis_results_list]...)))
     push!(sweep_results["mean_theta"], mean(vcat([r.mean_theta for r in analysis_results_list]...)))
 end
+end
 
 # 5. Convert results to DataFrame and save to CSV
 results_df = DataFrame(sweep_results)
-filename = "analysis_$(sweep_parameters.sweep_parameter_name).csv"
+filename = "analysis_$(sweep_parameters.sweep_parameter_name_one)_$(sweep_parameters.sweep_parameter_name_two).csv"
 filepath = datadir("sims", filename)
 CSV.write(filepath, results_df)
 println("Results saved to $filepath")

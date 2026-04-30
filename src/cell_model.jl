@@ -9,12 +9,20 @@ struct SimulationParameters <: Parameters
     D_angle::Float64
     D_position::Float64
     theta_alignment::Float64
-    run_to_tumble_rate::Float64
-    tumble_to_run_rate::Float64
+    run_to_tumble_rate_min::Float64
+    run_to_tumble_rate_max::Float64
+    run_to_tumble_rate_function::String
+    run_to_tumble_rate_allure::Float64
+    tumble_to_run_rate_min::Float64
+    tumble_to_run_rate_max::Float64
+    tumble_to_run_rate_function::String
+    tumble_to_run_rate_allure::Float64
     cell_hard_radius::Float64
     cell_soft_radius::Float64
     maximal_stretch::Float64
-    run_speed::Float64
+    run_speed_min::Float64
+    run_speed_max::Float64
+    run_speed_dist::String
     top_internal_pull_strength::Float64
     soft_boundary_potential_strength::Float64
     bottom_internal_pull_strength::Float64
@@ -50,6 +58,18 @@ struct CellCollective
     hitting_wall::Vector{Bool} # Whether each cell is currently hitting a wall
 end
 
+function sample_speed_distribution(p::SimulationParameters)
+    if p.run_speed_dist == "constant"
+        return fill(p.run_speed_min, p.num_cells)
+    elseif p.run_speed_dist == "uniform"
+        return rand(Uniform(p.run_speed_min, p.run_speed_max), p.num_cells)
+    elseif p.run_speed_dist == "normal"
+        return rand(Normal((p.run_speed_min + p.run_speed_max) / 2, (p.run_speed_max - p.run_speed_min) / 6), p.num_cells)
+    else
+        return fill(p.run_speed_min, p.num_cells)
+    end
+end
+
 function initialize_cell_collective(p::SimulationParameters, domain::DomainSpecs)
     bottom = Vector{SVector{2, Float64}}(undef, p.num_cells)
     top = Vector{SVector{2, Float64}}(undef, p.num_cells)
@@ -61,7 +81,7 @@ function initialize_cell_collective(p::SimulationParameters, domain::DomainSpecs
     forcestop = Vector{SVector{2, Float64}}(undef, p.num_cells)
     state = Vector{Int}(undef, p.num_cells)
     state_timer = Vector{Float64}(undef, p.num_cells)
-    run_speeds = Vector{Float64}(undef, p.num_cells)
+    run_speeds = sample_speed_distribution(p)
     hitting_wall = Vector{Bool}(undef, p.num_cells)
     for i in 1:p.num_cells
         bottom[i] = SVector(rand() * domain.domain_width, rand() * domain.domain_height)
@@ -71,10 +91,9 @@ function initialize_cell_collective(p::SimulationParameters, domain::DomainSpecs
         forcesbottom[i] = SVector(0.0, 0.0)
         forcestop[i] = SVector(0.0, 0.0)
         rand_aux = rand()  
-        time_quot = p.tumble_to_run_rate / (p.tumble_to_run_rate + p.run_to_tumble_rate)      
+        time_quot = p.tumble_to_run_rate_min / (p.tumble_to_run_rate_min + p.run_to_tumble_rate_max)      
         state[i] = rand_aux < time_quot ? 1 : 0 # Random initial state
         state_timer[i] = rand(Exponential(1.0)) # Random initial timer for state transitions
-        run_speeds[i] = p.run_speed
         neighboursbottom[i] = []
         neighbourstop[i] = []
         hitting_wall[i] = false
@@ -128,13 +147,9 @@ function compute_interaction_forces!(collective::CellCollective, p::SimulationPa
                 force_direction = distance_vector_bottom / distance_bottom
                 collective.bottom[i] += force_magnitude * force_direction / 2
                 collective.bottom[j] -= force_magnitude * force_direction / 2
-                collective.thetabar[i] += unit_vector_bottom
-                collective.thetabar[j] -= unit_vector_bottom
             elseif distance_bottom < 2 * p.cell_soft_radius
                 push!(collective.neighboursbottom[i], j)
                 push!(collective.neighboursbottom[j], i)
-                collective.thetabar[i] += unit_vector_bottom
-                collective.thetabar[j] -= unit_vector_bottom
             end
             if distance_top < 2 * p.cell_hard_radius
                 push!(collective.neighbourstop[i], j)
@@ -143,9 +158,13 @@ function compute_interaction_forces!(collective::CellCollective, p::SimulationPa
                 force_direction = distance_vector_top / distance_top
                 collective.top[i] += force_magnitude * force_direction / 2
                 collective.top[j] -= force_magnitude * force_direction / 2
+                collective.thetabar[i] += unit_vector_top
+                collective.thetabar[j] -= unit_vector_top
             elseif distance_top < 2 * p.cell_soft_radius
                 push!(collective.neighbourstop[i], j)
                 push!(collective.neighbourstop[j], i)
+                collective.thetabar[i] += unit_vector_top
+                collective.thetabar[j] -= unit_vector_top
             end
             if distance_top < morse_potential_top.cutoff && distance_top > 2 * p.cell_hard_radius
                 force_top = morse_interaction_forces(morse_potential_top, unit_vector_top, distance_top - 2*p.cell_hard_radius)
@@ -169,13 +188,37 @@ function compute_stochastic_forces!(collective::CellCollective, p::SimulationPar
         
 end
 
+function compute_tumble_to_run_rate(x::Float64, p::SimulationParameters)
+    rate_fct = p.tumble_to_run_rate_function
+    allure = p.tumble_to_run_rate_allure
+    if rate_fct == "constant"
+        return p.tumble_to_run_rate_min
+    elseif rate_fct == "sigmoid"
+        return p.tumble_to_run_rate_min + (p.tumble_to_run_rate_max - p.tumble_to_run_rate_min) / (1 + exp(-allure * x))
+    else
+        return p.tumble_to_run_rate_min
+    end
+end
+
+function compute_run_to_tumble_rate(x::Float64, p::SimulationParameters)
+    rate_fct = p.run_to_tumble_rate_function
+    allure = p.run_to_tumble_rate_allure
+    if rate_fct == "constant"
+        return p.run_to_tumble_rate_min
+    elseif rate_fct == "sigmoid"
+        return p.run_to_tumble_rate_max + (p.run_to_tumble_rate_min - p.run_to_tumble_rate_max) / (1 + exp(-allure * x))
+    else
+        return p.run_to_tumble_rate_min
+    end
+end
+
 function compute_state_changes!(collective::CellCollective, p::SimulationParameters)
-    tumble_to_run_rate = p.tumble_to_run_rate
-    run_to_tumble_rate = p.run_to_tumble_rate
+    
 
     #collective.state_timer .-= p.dt*((1 .- collective.state) .* tumble_to_run_rate .+ collective.state .* run_to_tumble_rate)
     for i in 1:p.num_cells
-        run_to_tumble_rate = p.run_to_tumble_rate
+        run_to_tumble_rate = compute_run_to_tumble_rate(collective.bottom[i][1], p)
+        tumble_to_run_rate = compute_tumble_to_run_rate(collective.bottom[i][1], p)
         if collective.state[i] == 1
             for j in collective.neighboursbottom[i]
                 distance_vector_bottom = collective.bottom[j] - collective.bottom[i]
@@ -330,12 +373,20 @@ function read_parameters(filename::String)
         Float64(_toml_value(parameters, "D_angle")),
         Float64(_toml_value(parameters, "D_position")),
         Float64(_toml_value(parameters, "theta_alignment")),
-        Float64(_toml_value(parameters, "run_to_tumble_rate")),
-        Float64(_toml_value(parameters, "tumble_to_run_rate")),
+        Float64(_toml_value(parameters, "run_to_tumble_rate_min")),
+        Float64(_toml_value(parameters, "run_to_tumble_rate_max")),
+        String(_toml_value(parameters, "run_to_tumble_rate_function")),
+        Float64(_toml_value(parameters, "run_to_tumble_rate_allure")),
+        Float64(_toml_value(parameters, "tumble_to_run_rate_min")),
+        Float64(_toml_value(parameters, "tumble_to_run_rate_max")),
+        String(_toml_value(parameters, "tumble_to_run_rate_function")),
+        Float64(_toml_value(parameters, "tumble_to_run_rate_allure")),        
         Float64(_toml_value(parameters, "cell_hard_radius")),
         Float64(_toml_value(parameters, "cell_soft_radius")),
         Float64(_toml_value(parameters, "maximal_stretch")),
-        Float64(_toml_value(parameters, "run_speed")),
+        Float64(_toml_value(parameters, "run_speed_min")),
+        Float64(_toml_value(parameters, "run_speed_max")),
+        String(_toml_value(parameters, "run_speed_distribution")),
         Float64(_toml_value(parameters, "top_internal_pull_strength")),
         Float64(_toml_value(parameters, "soft_boundary_potential_strength")),
         Float64(_toml_value(parameters, "bottom_internal_pull_strength")),
