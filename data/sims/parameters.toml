@@ -1,0 +1,53 @@
+# Domain Specifications
+domain_width = 200
+domain_height = 200
+
+# Simulation Specifications
+num_cells = 5
+dt = 0.1
+total_time = 100
+
+# Diffusion Constants
+D_angle = 0.1
+D_position = 0.1
+
+# Alignment Constant
+theta_alignment = 1
+
+# Running and Tumbling Jump Rates
+run_to_tumble_rate = 0.5
+tumble_to_run_rate = 0.1
+
+# Cell Characteristics
+cell_hard_radius = 5
+cell_soft_radius = 15
+
+# Cell Cohesion Characteristics 
+internal_cohesion_strength = 1
+maximal_stretch = 2000
+top_internal_pull_strength = 1
+bottom_internal_pull_strength = 1
+
+# Cell Speed
+run_speed = 20
+
+# Boundary Potential 
+soft_boundary_potential_strength = 1
+
+# Intercellular Top Potential (Morse with cutoff)
+top_morse_u0 = 20
+top_morse_v0 = 2.8
+top_morse_xi1 = 0.1
+top_morse_xi2 = 30
+top_morse_cutoff = 30
+
+# Intercellular Bottom Potential (Morse)
+bottom_morse_u0 = 2.8
+bottom_morse_v0 = 2.8
+bottom_morse_xi1 = 10
+bottom_morse_xi2 = 27.6
+
+# CIL Intensity
+cil_intensity = 1
+hehehe
+
