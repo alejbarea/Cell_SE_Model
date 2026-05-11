@@ -6,6 +6,8 @@ struct SimulationParameters <: Parameters
     num_cells::Int
     dt::Float64
     total_time::Float64
+    init_width::Float64
+    init_height::Float64
     D_angle::Float64
     D_position::Float64
     theta_alignment::Float64
@@ -25,8 +27,10 @@ struct SimulationParameters <: Parameters
     run_speed_dist::String
     top_internal_pull_strength::Float64
     soft_boundary_potential_strength::Float64
+    hard_boundary_velocity_behaviour::String
     bottom_internal_pull_strength::Float64
     cil_intensity::Float64
+    cil_wall_intensity::Float64
 end
 
 struct DomainSpecs <: Parameters
@@ -84,7 +88,7 @@ function initialize_cell_collective(p::SimulationParameters, domain::DomainSpecs
     run_speeds = sample_speed_distribution(p)
     hitting_wall = Vector{Bool}(undef, p.num_cells)
     for i in 1:p.num_cells
-        bottom[i] = SVector(rand() * domain.domain_width, rand() * domain.domain_height)
+        bottom[i] = SVector(rand() * p.init_width, rand() * p.init_height)
         theta[i] = rand() * 2 * pi # Random initial angle
         top[i] = bottom[i] - p.cell_hard_radius * SVector(cos(theta[i]), sin(theta[i])) # Initial top position directly above bottom
         thetabar[i] = SVector(cos(theta[i]), sin(theta[i])) # Initial desired angle same as initial angle
@@ -229,6 +233,31 @@ function compute_state_changes!(collective::CellCollective, p::SimulationParamet
                 dot_product = dot(unit_vector_bottom, speed_direction)
                 run_to_tumble_rate += p.cil_intensity * (atan((dot_product - cos35) / 0.00001) + pi/2)
             end
+
+            # Check distance to walls
+            dist_left = collective.bottom[i][1]
+            dist_right = domain.domain_width - collective.bottom[i][1]
+            dist_bottom = collective.bottom[i][2]
+            dist_top = domain.domain_height - collective.bottom[i][2]
+            cos85_wall = cos(85 * pi / 180)
+            
+            if dist_left < p.cell_soft_radius
+                dot_product_wall = -cos(collective.theta[i]) # Dot product with left wall normal (-1,0)
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+            if dist_right < p.cell_soft_radius
+                dot_product_wall = cos(collective.theta[i]) # Dot product with right wall normal (1,0)
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+            if dist_bottom < p.cell_soft_radius
+                dot_product_wall = -sin(collective.theta[i]) # Dot product with bottom wall normal (0,-1)
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+            if dist_top < p.cell_soft_radius
+                dot_product_wall = sin(collective.theta[i]) # Dot product with top wall normal (0,1)
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+
             collective.state_timer[i] -= p.dt * run_to_tumble_rate
                 
         else
@@ -254,23 +283,31 @@ function apply_hard_wall_boundary_conditions!(collective::CellCollective, domain
     for i in eachindex(collective.bottom)
         if collective.bottom[i][1] < p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], p.cell_hard_radius, 1)
-            #collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            if p.hard_boundary_velocity_behaviour == "bounce"
+                collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(1,0) # Align to the right
         elseif collective.bottom[i][1] > domain.domain_width - p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], 2*(domain.domain_width - p.cell_hard_radius) - collective.bottom[i][1], 1)
-            #collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            if p.hard_boundary_velocity_behaviour == "bounce"
+                collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(-1,0) # Align to the left
         end
         if collective.bottom[i][2] < p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], p.cell_hard_radius, 2)
-            #collective.theta[i] = -collective.theta[i] # Reflect angle
+            if p.hard_boundary_velocity_behaviour == "bounce"
+                collective.theta[i] = -collective.theta[i] # Reflect angle
+            end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(0,1) # Align to the top
         elseif collective.bottom[i][2] > domain.domain_height - p.cell_hard_radius
             collective.bottom[i] = setindex(collective.bottom[i], 2*(domain.domain_height - p.cell_hard_radius) - collective.bottom[i][2], 2)
-            #collective.theta[i] = -collective.theta[i] # Reflect angle
+            if p.hard_boundary_velocity_behaviour == "bounce"
+                collective.theta[i] = -collective.theta[i] # Reflect angle
+            end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(0,-1) # Align to the bottom
         end
@@ -295,6 +332,7 @@ function compute_soft_wall_forces!(collective::CellCollective, domain::DomainSpe
             collective.forcesbottom[i] += SVector(force_magnitude, 0.0)
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(1,0) # Align to the right
+            
         elseif collective.bottom[i][1] > domain.domain_width - p.cell_soft_radius
             force_magnitude = p.soft_boundary_potential_strength*(collective.bottom[i][1] - (domain.domain_width - p.cell_soft_radius))
             collective.forcesbottom[i] -= SVector(force_magnitude, 0.0)
@@ -370,6 +408,8 @@ function read_parameters(filename::String)
         Int(_toml_value(parameters, "num_cells")),
         Float64(_toml_value(parameters, "dt")),
         Float64(_toml_value(parameters, "total_time")),
+        Float64(_toml_value(parameters, "init_width")),
+        Float64(_toml_value(parameters, "init_height")),
         Float64(_toml_value(parameters, "D_angle")),
         Float64(_toml_value(parameters, "D_position")),
         Float64(_toml_value(parameters, "theta_alignment")),
@@ -389,8 +429,10 @@ function read_parameters(filename::String)
         String(_toml_value(parameters, "run_speed_distribution")),
         Float64(_toml_value(parameters, "top_internal_pull_strength")),
         Float64(_toml_value(parameters, "soft_boundary_potential_strength")),
+        String(_toml_value(parameters, "hard_boundary_velocity_behaviour")),
         Float64(_toml_value(parameters, "bottom_internal_pull_strength")),
-        Float64(_toml_value(parameters, "cil_intensity"))
+        Float64(_toml_value(parameters, "cil_intensity")),
+        Float64(_toml_value(parameters, "cil_wall_intensity"))
     )
 
     domain_specs = DomainSpecs(
