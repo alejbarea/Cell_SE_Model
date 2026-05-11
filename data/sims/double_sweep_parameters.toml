@@ -1,0 +1,9 @@
+sweep_parameter_name_one = "num_cells"
+sweep_init_one = 1
+sweep_step_one = 1
+sweep_stop_one = 5
+sweep_parameter_name_two = "cell_hard_radius"
+sweep_init_two = 5
+sweep_step_two = 1
+sweep_stop_two = 10
+sweep_repetitions = 5
