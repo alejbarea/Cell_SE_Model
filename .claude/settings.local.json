@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(julia --project=. scripts/diagnose.jl)",
+      "Bash(julia --project=. scripts/test_stability.jl)"
+    ]
+  }
+}

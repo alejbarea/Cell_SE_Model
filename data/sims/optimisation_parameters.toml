@@ -1,0 +1,49 @@
+# Configuration for the random-search parameter optimiser.
+#   Driver:  scripts/optimise_parameters.jl
+#   Inspect: scripts/inspect_optimised.jl
+#
+# Goal: find parameter sets that make the cells form a TIGHT cluster
+# (low radius of gyration) AND penetrate FAR to the right in the domain.
+#
+# Everything not listed under [ranges] is held fixed at its value in
+# `base_parameters_file` (domain size, num_cells, dt, total_time, the
+# init region, cell radii, rate functions, allures, etc.).
+
+base_parameters_file   = "test_parameters.toml"  # fast config used for the search
+num_samples            = 150      # random parameter sets to evaluate
+repetitions            = 4        # simulations averaged per set; penetration of a
+                                  # tight cluster random-walks a lot, so >=4 is advised
+random_seed            = 1234     # makes the search reproducible
+metric_window_fraction = 0.1      # metrics averaged over the final 10% of timesteps
+
+# Varied parameters — each is sampled uniformly in [min, max].
+# For run/tumble rates the min/max pair is reordered if needed; run_speed_max
+# is forced equal to run_speed_min (run_speed_distribution = "constant").
+#
+# Ranges are kept within ~0.25x-3x of the base config values: the explicit
+# Euler integrator (dt = 0.1) goes numerically unstable for very stiff Morse
+# forces, so overly wide ranges just waste the search budget on blow-ups.
+# Candidates that still blow up are recorded as NaN and dropped automatically.
+[ranges]
+top_morse_u0     = [10, 120]
+top_morse_v0     = [5, 60]
+top_morse_xi1    = [2, 15]
+top_morse_xi2    = [15, 90]
+top_morse_cutoff = [30, 100]
+bottom_morse_u0     = [3, 30]
+bottom_morse_v0     = [2, 20]
+bottom_morse_xi1    = [3, 25]
+bottom_morse_xi2    = [20, 100]
+bottom_morse_cutoff = [30, 110]
+cil_intensity      = [0.0, 0.08]
+cil_wall_intensity = [0.0, 0.08]
+run_to_tumble_rate_min = [0.005, 0.2]
+run_to_tumble_rate_max = [0.15, 1.2]
+tumble_to_run_rate_min = [0.15, 1.8]
+tumble_to_run_rate_max = [0.6, 4.0]
+run_speed_min          = [15, 70]
+D_angle         = [0.0, 0.25]
+D_position      = [0.0, 0.12]
+theta_alignment = [0.0, 7.0]
+top_internal_pull_strength    = [0.0, 4.0]
+bottom_internal_pull_strength = [0.0, 4.0]

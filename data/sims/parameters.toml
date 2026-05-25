@@ -1,69 +1,90 @@
-# Domain Specifications
-domain_width = 2000
+# Epithelial-like loose cohesive cluster, drifting rightward.
+#
+# Targets:
+#   - Hard core 4, soft halo extending to 8 (clear two-scale cell).
+#   - Preferred neighbour spacing ≈ 18–22 (about 2.2 × hard diameter): cohesive
+#     but not jammed; mimics the loose packing of migrating epithelial sheets.
+#   - Net population drift toward +x via x-dependent sigmoid run/tumble rates.
+#
+# Note: in the current loop order (simulation_logic.jl), `compute_state_changes!`
+# runs before any pass that populates neighboursbottom, so cell-vs-cell CIL is
+# inactive. Wall CIL still works.
+
+# Domain — long horizontal channel
+domain_width = 1000
 domain_height = 200
 
-# Simulation Specifications
-num_cells = 500
-dt = 0.1
-total_time = 100
+# Simulation
+num_cells = 120
+dt = 0.05
+total_time = 400              # → 8000 steps
 
-# Initialization
-
-init_width = 400
+# Init: cluster on the left third so the drift has somewhere to go
+init_width = 250
 init_height = 200
 
-# Diffusion Constants
+# Diffusion — small enough that ballistic runs dominate
 D_angle = 0.1
-D_position = 0.1
+D_position = 0.05
 
-# Alignment Constant
-theta_alignment = 1
+# Polarity restoring torque (tumbling cells only)
+theta_alignment = 2
 
-# Running and Tumbling Jump Rates
-run_to_tumble_rate_min = 0.1
-run_to_tumble_rate_max = 0.1
-run_to_tumble_rate_function = "constant"
-run_to_tumble_rate_allure = 1
+# Run-to-tumble rate: HIGH at the left wall (≈0.6), LOW on the right (≈0.05).
+# Cells reaching the right side enjoy long runs.
+run_to_tumble_rate_min = 0.05
+run_to_tumble_rate_max = 0.6
+run_to_tumble_rate_function = "sigmoid"
+run_to_tumble_rate_allure = 0.015   # transition zone ≈ [−200, +200] around x=0
 
-tumble_to_run_rate_min = 0.4
-tumble_to_run_rate_max = 0.4
-tumble_to_run_rate_function = "constant"
-tumble_to_run_rate_allure = 1
+# Tumble-to-run rate: LOW at left (≈0.3), HIGH at right (≈1.5).
+# Combined with above, steady-state running fraction ≈ 33% at left, ≈97% at right.
+tumble_to_run_rate_min = 0.3
+tumble_to_run_rate_max = 1.5
+tumble_to_run_rate_function = "sigmoid"
+tumble_to_run_rate_allure = 0.015
 
-# Cell Characteristics
-cell_hard_radius = 5
-cell_soft_radius = 15
+# Two-scale cell: hard core 4, soft halo to 8
+cell_hard_radius = 4
+cell_soft_radius = 8
 
-# Cell Cohesion Characteristics 
-internal_cohesion_strength = 1
-maximal_stretch = 2000
-top_internal_pull_strength = 1
-bottom_internal_pull_strength = 1
+# Cohesion spring (top ↔ bottom of the same cell)
+maximal_stretch = 30                 # natural extension ~8–10, snap branch never fires
+top_internal_pull_strength = 1.5
+bottom_internal_pull_strength = 1.5
+internal_cohesion_strength = 1       # present-but-unused legacy key
 
-# Cell Speed
-run_speed_min = 50
-run_speed_max = 50
-run_speed_distribution = "constant"
+# Run speed — moderate, slight heterogeneity for natural leader/follower sorting
+run_speed_min = 25
+run_speed_max = 35
+run_speed_distribution = "uniform"
 
-# Boundary Potential 
-soft_boundary_potential_strength = 1
-hard_boundary_velocity_behaviour = "slide" # "slide" or "bounce"
+# Walls
+soft_boundary_potential_strength = 1.5
+hard_boundary_velocity_behaviour = "tangential"   # slide along walls, no bouncing back
 
-# Intercellular Top Potential (Morse with cutoff)
-top_morse_u0 = 20
-top_morse_v0 = 2.8
-top_morse_xi1 = 0.1
-top_morse_xi2 = 30
-top_morse_cutoff = 30
+# Morse, top surface — preferred separation d ≈ 18 (d_eff* ≈ 10)
+# u₀=50 gives a 44-unit repulsion at touching; v₀=6 gives a gentle attractive
+# tail (~−2 at the cutoff). Stiff enough to set the spacing, soft enough that
+# dt·u₀ = 2.5 per step is well-behaved.
+top_morse_u0 = 50
+top_morse_v0 = 6
+top_morse_xi1 = 4
+top_morse_xi2 = 20
+top_morse_cutoff = 35
 
-# Intercellular Bottom Potential (Morse)
-bottom_morse_u0 = 10
-bottom_morse_v0 = 2.8
-bottom_morse_xi1 = 10
-bottom_morse_xi2 = 27.6
+# Morse, bottom surface — preferred separation d ≈ 22 (d_eff* ≈ 6 above the
+# 2·soft_radius shift). Gentler than top: u₀=20 means dt·u₀ = 1 per step.
+# Below d=16 the eps() guard zeroes the force, so the soft halo is purely
+# soft-collision territory — exactly the epithelial "soft contact" regime.
+bottom_morse_u0 = 20
+bottom_morse_v0 = 6
+bottom_morse_xi1 = 4
+bottom_morse_xi2 = 20
+bottom_morse_cutoff = 40
 
-# CIL Intensity
-cil_intensity = 0.05
+# CIL — kept ready for re-enabling cell CIL by re-ordering the loop.
+# cil_intensity acts on cell neighbours (currently inactive due to loop order);
+# cil_wall_intensity still fires when bottom is within cell_soft_radius of a wall.
+cil_intensity = 0.02
 cil_wall_intensity = 0.05
-
-

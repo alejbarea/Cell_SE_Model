@@ -135,14 +135,16 @@ function morse_interaction_forces(potential::MorsePotential, unit_vector::SVecto
     end
 end
 
-function compute_interaction_forces!(collective::CellCollective, p::SimulationParameters, morse_potential_top::MorsePotential, morse_potential_bottom::MorsePotential)
+# Hard pair interactions: excluded-volume repulsion (position-level), neighbour
+# registration, and thetabar accumulation from top-surface contacts. Runs first
+# so positions are resolved before any soft force law samples them.
+function compute_hard_interaction_forces!(collective::CellCollective, p::SimulationParameters)
     for i in 1:p.num_cells
         for j in i+1:p.num_cells
             distance_vector_bottom = collective.bottom[i] - collective.bottom[j]
             distance_vector_top = collective.top[i] - collective.top[j]
             distance_bottom = norm(distance_vector_bottom)
             distance_top = norm(distance_vector_top)
-            unit_vector_bottom = distance_vector_bottom / distance_bottom
             unit_vector_top = distance_vector_top / distance_top
             if distance_bottom < 2 * p.cell_hard_radius
                 push!(collective.neighboursbottom[i], j)
@@ -170,14 +172,32 @@ function compute_interaction_forces!(collective::CellCollective, p::SimulationPa
                 collective.thetabar[i] += unit_vector_top
                 collective.thetabar[j] -= unit_vector_top
             end
+        end
+    end
+end
+
+# Soft pair interactions: Morse potential forces accumulated into forcestop /
+# forcesbottom. Assumes compute_hard_interaction_forces! has already snapped
+# overlapping cells apart, so the Morse law samples post-resolution distances.
+function compute_soft_interaction_forces!(collective::CellCollective, p::SimulationParameters, morse_potential_top::MorsePotential, morse_potential_bottom::MorsePotential)
+    for i in 1:p.num_cells
+        for j in i+1:p.num_cells
+            distance_vector_bottom = collective.bottom[i] - collective.bottom[j]
+            distance_vector_top = collective.top[i] - collective.top[j]
+            distance_bottom = norm(distance_vector_bottom)
+            distance_top = norm(distance_vector_top)
+            unit_vector_bottom = distance_vector_bottom / distance_bottom
+            unit_vector_top = distance_vector_top / distance_top
             if distance_top < morse_potential_top.cutoff && distance_top > 2 * p.cell_hard_radius
                 force_top = morse_interaction_forces(morse_potential_top, unit_vector_top, distance_top - 2*p.cell_hard_radius)
                 collective.forcestop[i] += force_top / 2
                 collective.forcestop[j] -= force_top / 2
             end
-            force_bottom = morse_interaction_forces(morse_potential_bottom, unit_vector_bottom, distance_bottom - 2*p.cell_soft_radius)
-            collective.forcesbottom[i] += force_bottom / 2
-            collective.forcesbottom[j] -= force_bottom / 2
+            if distance_bottom < morse_potential_bottom.cutoff
+                force_bottom = morse_interaction_forces(morse_potential_bottom, unit_vector_bottom, distance_bottom - 2*p.cell_soft_radius)
+                collective.forcesbottom[i] += force_bottom / 2
+                collective.forcesbottom[j] -= force_bottom / 2
+            end
         end
     end
 end
@@ -285,6 +305,11 @@ function apply_hard_wall_boundary_conditions!(collective::CellCollective, domain
             collective.bottom[i] = setindex(collective.bottom[i], p.cell_hard_radius, 1)
             if p.hard_boundary_velocity_behaviour == "bounce"
                 collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            elseif p.hard_boundary_velocity_behaviour == "tangential"
+                theta_vector = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
+                outside_normal_vector = SVector(-1.0, 0.0) # Normal vector pointing outside the domain
+                theta_vector -= dot(theta_vector, outside_normal_vector) * outside_normal_vector # Remove normal component to make it tangential
+                collective.theta[i] = atan(theta_vector[2], theta_vector[1]) # Update angle based on new vector
             end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(1,0) # Align to the right
@@ -292,6 +317,11 @@ function apply_hard_wall_boundary_conditions!(collective::CellCollective, domain
             collective.bottom[i] = setindex(collective.bottom[i], 2*(domain.domain_width - p.cell_hard_radius) - collective.bottom[i][1], 1)
             if p.hard_boundary_velocity_behaviour == "bounce"
                 collective.theta[i] = pi - collective.theta[i] # Reflect angle
+            elseif p.hard_boundary_velocity_behaviour == "tangential"
+                theta_vector = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
+                outside_normal_vector = SVector(1.0, 0.0) # Normal vector pointing outside the domain
+                theta_vector -= dot(theta_vector, outside_normal_vector) * outside_normal_vector # Remove normal component to make it tangential
+                collective.theta[i] = atan(theta_vector[2], theta_vector[1]) # Update angle based on new vector
             end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(-1,0) # Align to the left
@@ -300,6 +330,11 @@ function apply_hard_wall_boundary_conditions!(collective::CellCollective, domain
             collective.bottom[i] = setindex(collective.bottom[i], p.cell_hard_radius, 2)
             if p.hard_boundary_velocity_behaviour == "bounce"
                 collective.theta[i] = -collective.theta[i] # Reflect angle
+            elseif p.hard_boundary_velocity_behaviour == "tangential"
+                theta_vector = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
+                outside_normal_vector = SVector(0.0, -1.0) # Normal vector pointing outside the domain
+                theta_vector -= dot(theta_vector, outside_normal_vector) * outside_normal_vector # Remove normal component to make it tangential
+                collective.theta[i] = atan(theta_vector[2], theta_vector[1]) # Update angle based on new vector
             end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(0,1) # Align to the top
@@ -307,6 +342,11 @@ function apply_hard_wall_boundary_conditions!(collective::CellCollective, domain
             collective.bottom[i] = setindex(collective.bottom[i], 2*(domain.domain_height - p.cell_hard_radius) - collective.bottom[i][2], 2)
             if p.hard_boundary_velocity_behaviour == "bounce"
                 collective.theta[i] = -collective.theta[i] # Reflect angle
+            elseif p.hard_boundary_velocity_behaviour == "tangential"
+                theta_vector = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
+                outside_normal_vector = SVector(0.0, 1.0) # Normal vector pointing outside the domain
+                theta_vector -= dot(theta_vector, outside_normal_vector) * outside_normal_vector # Remove normal component to make it tangential
+                collective.theta[i] = atan(theta_vector[2], theta_vector[1]) # Update angle based on new vector
             end
             collective.hitting_wall[i] = true
             collective.thetabar[i] += SVector(0,-1) # Align to the bottom
@@ -453,7 +493,7 @@ function read_parameters(filename::String)
         Float64(_toml_value(parameters, "bottom_morse_v0")),
         Float64(_toml_value(parameters, "bottom_morse_xi1")),
         Float64(_toml_value(parameters, "bottom_morse_xi2")),
-        Inf
+        Float64(_toml_value(parameters, "bottom_morse_cutoff"))
     )
 
     return simulation_parameters, domain_specs, morse_potential_top, morse_potential_bottom
