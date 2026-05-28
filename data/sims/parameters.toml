@@ -11,17 +11,20 @@
 # inactive. Wall CIL still works.
 
 # Domain — long horizontal channel
-domain_width = 1000
-domain_height = 200
+domain_width = 4000
+domain_height = 4000
 
 # Simulation
-num_cells = 120
+num_cells = 500
 dt = 0.05
-total_time = 400              # → 8000 steps
+total_time = 150              # → 8000 steps
 
 # Init: cluster on the left third so the drift has somewhere to go
-init_width = 250
-init_height = 200
+init_width = 500
+init_height = 500
+
+margin_width = 1750
+margin_height = 1750
 
 # Diffusion — small enough that ballistic runs dominate
 D_angle = 0.1

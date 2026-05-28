@@ -8,6 +8,8 @@ struct SimulationParameters <: Parameters
     total_time::Float64
     init_width::Float64
     init_height::Float64
+    margin_width::Float64
+    margin_height::Float64
     D_angle::Float64
     D_position::Float64
     theta_alignment::Float64
@@ -88,7 +90,7 @@ function initialize_cell_collective(p::SimulationParameters, domain::DomainSpecs
     run_speeds = sample_speed_distribution(p)
     hitting_wall = Vector{Bool}(undef, p.num_cells)
     for i in 1:p.num_cells
-        bottom[i] = SVector(rand() * p.init_width, rand() * p.init_height)
+        bottom[i] = SVector(p.margin_width + rand() * p.init_width, p.margin_height + rand() * p.init_height)
         theta[i] = rand() * 2 * pi # Random initial angle
         top[i] = bottom[i] - p.cell_hard_radius * SVector(cos(theta[i]), sin(theta[i])) # Initial top position directly above bottom
         thetabar[i] = SVector(cos(theta[i]), sin(theta[i])) # Initial desired angle same as initial angle
@@ -450,6 +452,8 @@ function read_parameters(filename::String)
         Float64(_toml_value(parameters, "total_time")),
         Float64(_toml_value(parameters, "init_width")),
         Float64(_toml_value(parameters, "init_height")),
+        Float64(_toml_value(parameters, "margin_width")),
+        Float64(_toml_value(parameters, "margin_height")),
         Float64(_toml_value(parameters, "D_angle")),
         Float64(_toml_value(parameters, "D_position")),
         Float64(_toml_value(parameters, "theta_alignment")),
