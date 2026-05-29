@@ -6,46 +6,51 @@
 #     but not jammed; mimics the loose packing of migrating epithelial sheets.
 #   - Net population drift toward +x via x-dependent sigmoid run/tumble rates.
 #
-# Note: in the current loop order (simulation_logic.jl), `compute_state_changes!`
-# runs before any pass that populates neighboursbottom, so cell-vs-cell CIL is
-# inactive. Wall CIL still works.
+# Note: in the current loop order (simulation_logic.jl), `compute_hard_interaction_forces!`
+# populates neighboursbottom BEFORE `compute_state_changes!`, so cell-vs-cell CIL
+# IS active every step (in addition to wall CIL).
 
 # Domain — long horizontal channel
-domain_width = 4000
-domain_height = 4000
+domain_width = 2000
+domain_height = 100
 
 # Simulation
 num_cells = 500
 dt = 0.05
 total_time = 150              # → 8000 steps
 
-# Init: cluster on the left third so the drift has somewhere to go
-init_width = 500
-init_height = 500
+# Init: seed a full-height sheet against the LEFT wall (margin 0) so the wall
+# polarises it +x and it drifts rightward down the channel. init_height spans the
+# whole channel — cells fill the entire cross-section. Touching the top/bottom
+# walls is fine; the goal is to keep the CENTRE populated too (not a hollow,
+# wall-hugging band) — handled by the "bounce" wall behaviour below.
+init_width = 700
+init_height = 100
 
-margin_width = 1750
-margin_height = 1750
+margin_width = 0
+margin_height = 0
 
-# Diffusion — small enough that ballistic runs dominate
-D_angle = 0.1
-D_position = 0.05
+# Diffusion — small enough that ballistic runs dominate; lowered so the sheet
+# stays connected instead of melting during migration.
+D_angle = 0.08
+D_position = 0.02
 
-# Polarity restoring torque (tumbling cells only)
-theta_alignment = 2
+# Polarity restoring torque (tumbling cells only) — a touch stronger for more
+# polar order while drifting.
+theta_alignment = 2.5
 
-# Run-to-tumble rate: HIGH at the left wall (≈0.6), LOW on the right (≈0.05).
-# Cells reaching the right side enjoy long runs.
+# Run-to-tumble rate: x-dependent sigmoid — HIGH near the left wall, LOW on the
+# right, so cells run long once headed right → net rightward drift.
 run_to_tumble_rate_min = 0.05
 run_to_tumble_rate_max = 0.6
 run_to_tumble_rate_function = "sigmoid"
-run_to_tumble_rate_allure = 0.015   # transition zone ≈ [−200, +200] around x=0
+run_to_tumble_rate_allure = 0.005   # gentle gradient so the bias reaches into the bulk
 
-# Tumble-to-run rate: LOW at left (≈0.3), HIGH at right (≈1.5).
-# Combined with above, steady-state running fraction ≈ 33% at left, ≈97% at right.
+# Tumble-to-run rate: x-dependent sigmoid — LOW at left, HIGH on the right.
 tumble_to_run_rate_min = 0.3
 tumble_to_run_rate_max = 1.5
 tumble_to_run_rate_function = "sigmoid"
-tumble_to_run_rate_allure = 0.015
+tumble_to_run_rate_allure = 0.005
 
 # Two-scale cell: hard core 4, soft halo to 8
 cell_hard_radius = 4
@@ -57,37 +62,53 @@ top_internal_pull_strength = 1.5
 bottom_internal_pull_strength = 1.5
 internal_cohesion_strength = 1       # present-but-unused legacy key
 
-# Run speed — moderate, slight heterogeneity for natural leader/follower sorting
+# Run speed — moderate, slight heterogeneity for natural leader/follower sorting.
 run_speed_min = 25
 run_speed_max = 35
 run_speed_distribution = "uniform"
 
-# Walls
+# Walls. "bounce" reflects cells back INTO the channel at the top/bottom walls
+# instead of letting them slide along the wall ("tangential"). With ~90% of cells
+# running, tangential makes them stick to the top/bottom walls and the channel
+# CENTRE empties out (a hollow band); bounce keeps the whole cross-section
+# populated while the band still drifts right (left-wall bounce sends leftward
+# movers back to the right, preserving the rightward pump).
 soft_boundary_potential_strength = 1.5
-hard_boundary_velocity_behaviour = "tangential"   # slide along walls, no bouncing back
+hard_boundary_velocity_behaviour = "bounce"   # "bounce" | "tangential" | "slide"
 
-# Morse, top surface — preferred separation d ≈ 18 (d_eff* ≈ 10)
-# u₀=50 gives a 44-unit repulsion at touching; v₀=6 gives a gentle attractive
-# tail (~−2 at the cutoff). Stiff enough to set the spacing, soft enough that
-# dt·u₀ = 2.5 per step is well-behaved.
-top_morse_u0 = 50
-top_morse_v0 = 6
-top_morse_xi1 = 4
-top_morse_xi2 = 20
-top_morse_cutoff = 35
+# Morse, TOP surface = cell–cell ADHESION (cadherin-like contact).
+# Shape: repulsive core at contact → shallow attractive well → nothing past the
+# cutoff. Active only for 2·hard_radius < d < cutoff (d_eff = d − 2·hard_radius),
+# so it fires ONLY in adhesive contact. F(contact) ≈ u₀−v₀ = 24 (firm core);
+# zero-force spacing d_eff* = ξ1ξ2/(ξ2−ξ1)·ln(u₀/v₀) ≈ 6 → top spacing ≈ 14.
+# CUTOFF kept short (just past the first neighbour shell): a deep/long-range
+# attractive well summed over many neighbours collapses the cluster (N-body),
+# so the well is shallow and local.
+top_morse_u0 = 30
+top_morse_v0 = 8
+top_morse_xi1 = 2.5
+top_morse_xi2 = 7
+top_morse_cutoff = 22
 
-# Morse, bottom surface — preferred separation d ≈ 22 (d_eff* ≈ 6 above the
-# 2·soft_radius shift). Gentler than top: u₀=20 means dt·u₀ = 1 per step.
-# Below d=16 the eps() guard zeroes the force, so the soft halo is purely
-# soft-collision territory — exactly the epithelial "soft contact" regime.
-bottom_morse_u0 = 20
-bottom_morse_v0 = 6
-bottom_morse_xi1 = 4
-bottom_morse_xi2 = 20
-bottom_morse_cutoff = 40
+# Morse, BOTTOM surface = SUBSTRATE SENSING (chemical/mechanical).
+# Shape: short-range repulsion + SLIGHT, longer-range attraction (cells recruit
+# each other across a few cell diameters). d_eff = d − 2·hard_radius (continuous
+# core from the hard radius — see compute_soft_interaction_forces!). LONGER range
+# than the top adhesion (cutoff 50 > 22) but NOT domain-spanning: truly
+# domain-wide attraction summed over hundreds of cells collapses the sheet to a
+# point. Tiny v₀ = slight; firm u₀ = short repulsion.
+bottom_morse_u0 = 25
+bottom_morse_v0 = 1.5
+bottom_morse_xi1 = 2.5
+bottom_morse_xi2 = 22
+bottom_morse_cutoff = 50
 
-# CIL — kept ready for re-enabling cell CIL by re-ordering the loop.
-# cil_intensity acts on cell neighbours (currently inactive due to loop order);
-# cil_wall_intensity still fires when bottom is within cell_soft_radius of a wall.
-cil_intensity = 0.02
+# CIL — contact inhibition of locomotion.
+# cil_intensity acts on cell neighbours and IS active every step:
+# compute_hard_interaction_forces! builds neighboursbottom before
+# compute_state_changes! reads it (see simulation_logic.jl loop order).
+# It makes running cells tumble when a neighbour sits in their forward 35° cone,
+# which promotes dispersal — kept modest here so cohesion is preserved.
+# cil_wall_intensity fires when bottom is within cell_soft_radius of a wall.
+cil_intensity = 0.005
 cil_wall_intensity = 0.05
