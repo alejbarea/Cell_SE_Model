@@ -191,12 +191,14 @@ function compute_soft_interaction_forces!(collective::CellCollective, p::Simulat
             unit_vector_bottom = distance_vector_bottom / distance_bottom
             unit_vector_top = distance_vector_top / distance_top
             if distance_top < morse_potential_top.cutoff && distance_top > 2 * p.cell_hard_radius
-                force_top = morse_interaction_forces(morse_potential_top, unit_vector_top, distance_top - 2*p.cell_hard_radius)
+                r_well = p.cell_hard_radius + p.cell_soft_radius
+                force_top = morse_interaction_forces(morse_potential_top, unit_vector_top, distance_top - r_well)
                 collective.forcestop[i] += force_top / 2
                 collective.forcestop[j] -= force_top / 2
             end
             if distance_bottom < morse_potential_bottom.cutoff
-                force_bottom = morse_interaction_forces(morse_potential_bottom, unit_vector_bottom, distance_bottom - 2*p.cell_hard_radius)
+                r_well = 2*p.cell_soft_radius
+                force_bottom = morse_interaction_forces(morse_potential_bottom, unit_vector_bottom, distance_bottom - r_well)
                 collective.forcesbottom[i] += force_bottom / 2
                 collective.forcesbottom[j] -= force_bottom / 2
             end
