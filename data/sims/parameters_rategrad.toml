@@ -1,0 +1,88 @@
+# SCRATCH tuning block for the NEW model (purely repulsive Morse + alignment-gated
+# adhesion springs). scan_metrics.jl overrides num_cells/domain_*/init_*/margin_*/
+# total_time per scenario; the values here for those keys are placeholders.
+#
+# Mechanism (current code):
+#   * Morse TOP & BOTTOM are EXCLUSIVELY REPULSIVE (v0 = 0) -> pure excluded volume.
+#     Cannot collapse (no attractive tail to sum over neighbours).
+#   * Cohesion = compute_adhesion_forces!: a linear SPRING on the top surface,
+#     F = adhesion_strength*(2*adhesion_radius - d_top), pulling cells together,
+#     but ONLY for neighbours within a +-35 deg cone of the cell heading
+#     (|dot(u_ij, heading_i)| > cos35). => cohesion needs ALIGNMENT; clusters
+#     chain/stream along the direction of travel.
+
+# Domain (placeholder; overridden per scenario)
+domain_width = 500
+domain_height = 150
+
+# Simulation (overridden per scenario)
+num_cells = 50
+dt = 0.05
+total_time = 120
+
+# Init region (overridden per scenario)
+init_width = 100
+init_height = 120
+margin_width = 0
+margin_height = 0
+
+# Diffusion
+D_angle = 0.04
+D_position = 0.02
+
+# Polarity restoring torque (tumbling cells only). LOW: a high value makes
+# clustered tumbling cells turn AWAY from neighbours (thetabar points outward)
+# and actively disperse the group; low keeps them on their (rightward) heading.
+theta_alignment = 1.0
+
+# Run/tumble rates — x-sigmoid
+run_to_tumble_rate_min = 0.05
+run_to_tumble_rate_max = 2.0
+run_to_tumble_rate_function = "sigmoid"
+run_to_tumble_rate_allure = -0.001
+tumble_to_run_rate_min = 0.1
+tumble_to_run_rate_max = 1.5
+tumble_to_run_rate_function = "sigmoid"
+tumble_to_run_rate_allure = -0.001
+
+# Cell geometry
+cell_hard_radius = 5
+cell_soft_radius = 8
+
+# Internal cohesion spring (top <-> bottom of same cell)
+maximal_stretch = 30
+top_internal_pull_strength = 1.5
+bottom_internal_pull_strength = 1.5
+internal_cohesion_strength = 1   # legacy, unused
+
+# Run speed
+run_speed_min = 25
+run_speed_max = 25
+run_speed_distribution = "constant"
+
+# Walls
+soft_boundary_potential_strength = 1.5
+hard_boundary_velocity_behaviour = "bounce"
+
+# TOP Morse = REPULSION ONLY (v0 = 0). r_well = hard+soft = 13; repulsion active
+# for d_top < cutoff, growing as cells approach.
+top_morse_u0 = 10
+top_morse_v0 = 0
+top_morse_xi1 = 3
+top_morse_xi2 = 6
+top_morse_cutoff = 16
+
+# BOTTOM Morse = REPULSION ONLY (v0 = 0). r_well = 2*soft = 16.
+bottom_morse_u0 = 10
+bottom_morse_v0 = 0
+bottom_morse_xi1 = 2
+bottom_morse_xi2 = 20
+bottom_morse_cutoff = 16
+
+# CIL
+cil_intensity = 0.005
+cil_wall_intensity = 0.05
+
+# ADHESION springs (alignment-gated, top surface). range = 2*adhesion_radius.
+adhesion_strength = 1.5
+adhesion_radius = 14

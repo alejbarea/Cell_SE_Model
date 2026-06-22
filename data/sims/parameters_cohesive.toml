@@ -1,0 +1,118 @@
+# ============================================================================
+# Collective-migration parameter set — NEW model (repulsive Morse + adhesion springs).
+# ONE physics block that behaves across small / medium / big groups:
+#
+#   - small  (~10 cells): stick into a cohesive cluster, travel together (+ a few
+#                         stragglers that peel off and move alone).
+#   - medium (~50):       one cohesive migrating blob.
+#   - big    (~300):      one or a few cohesive packed clusters — NO black-hole
+#                         collapse (radius of gyration stays ~constant, cells keep
+#                         their excluded volume), NO vortex.
+#
+# Only num_cells / domain_* / init_* / margin_* / total_time change between
+# scales; the PHYSICS below is identical. scripts/scan_metrics.jl (headless
+# metrics), scripts/snapshot_scenarios.jl (final-frame PNGs) and
+# scripts/render_scenarios.jl (MP4s) sweep those scenario fields over this block.
+#
+# MECHANISM (current code):
+#   * Morse TOP & BOTTOM are EXCLUSIVELY REPULSIVE (v0 = 0) -> pure excluded
+#     volume. With no attractive tail to sum over neighbours, the sheet CANNOT
+#     collapse to a point.
+#   * Cohesion comes from compute_adhesion_forces!: a linear SPRING on the top
+#     surface, F = adhesion_strength*(2*adhesion_radius - d_top), pulling cells
+#     together, gated to neighbours within a +-35 deg cone of the cell heading
+#     (|dot(u_ij, heading)| > cos35). So cells stick to those in front/behind
+#     -> clusters chain/stream along the direction of travel.
+#
+# TUNING RATIONALE (what the trade-offs are):
+#   * Cohesion needs the adhesion spring to beat motility AND the dispersive
+#     thetabar torque (thetabar from contacts points AWAY from neighbours, so a
+#     high theta_alignment actively scatters a tumbling cluster). Hence
+#     theta_alignment is LOW (1.0) and run_speed moderate (6).
+#   * A LONG adhesion range (adhesion_radius 18 -> reach 36) is what makes small
+#     groups robust: it recaptures edge cells that briefly lose contact. A short
+#     range leaves the 10-cell group flaky.
+#   * Morse u0 is kept SOFT (10): stiffening it to "space cells out" instead
+#     ejects edge cells from small groups and breaks their cohesion. The clusters
+#     therefore pack tight (bottoms ~ hard contact); that is a STABLE cluster,
+#     not a collapse.
+#   * Cluster TRAVEL is modest: the only rightward cue (thetabar -> +x for
+#     isolated cells, + left-wall pump) acts on edge/lone cells, not the bulk, so
+#     a tightly bound cluster drifts slowly while some cells peel off and run.
+#     Pushing travel harder (higher speed / theta_alignment) trades away cohesion.
+# ============================================================================
+
+# --- Domain (default = medium channel) ---
+domain_width = 500
+domain_height = 150
+
+# --- Simulation ---
+num_cells = 50
+dt = 0.05
+total_time = 200
+
+# --- Init region (default = a compact blob seeded near the left) ---
+init_width = 70
+init_height = 90
+margin_width = 8
+margin_height = 30
+
+# --- Diffusion (low angular noise so clusters stay aligned/coherent) ---
+D_angle = 0.04
+D_position = 0.02
+
+# --- Polarity restoring torque (tumbling cells only). LOW: thetabar points AWAY
+#     from neighbours, so a high value scatters clustered tumbling cells. ---
+theta_alignment = 1.0
+
+# --- Run/tumble rates: x-sigmoid (left-biased pump) ---
+run_to_tumble_rate_min = 0.05
+run_to_tumble_rate_max = 0.6
+run_to_tumble_rate_function = "sigmoid"
+run_to_tumble_rate_allure = 0.01
+tumble_to_run_rate_min = 0.3
+tumble_to_run_rate_max = 1.5
+tumble_to_run_rate_function = "sigmoid"
+tumble_to_run_rate_allure = 0.01
+
+# --- Cell geometry ---
+cell_hard_radius = 5
+cell_soft_radius = 8
+
+# --- Internal cohesion spring (top <-> bottom of same cell) ---
+maximal_stretch = 30
+top_internal_pull_strength = 1.5
+bottom_internal_pull_strength = 1.5
+internal_cohesion_strength = 1   # legacy key, unused
+
+# --- Run speed. Moderate: higher disperses small groups, lower kills travel. ---
+run_speed_min = 6
+run_speed_max = 6
+run_speed_distribution = "constant"
+
+# --- Walls ---
+soft_boundary_potential_strength = 1.5
+hard_boundary_velocity_behaviour = "bounce"
+
+# --- TOP Morse = REPULSION ONLY (v0 = 0). Soft core (u0 10) on purpose. ---
+top_morse_u0 = 10
+top_morse_v0 = 0
+top_morse_xi1 = 3
+top_morse_xi2 = 6
+top_morse_cutoff = 16
+
+# --- BOTTOM Morse = REPULSION ONLY (v0 = 0). ---
+bottom_morse_u0 = 10
+bottom_morse_v0 = 0
+bottom_morse_xi1 = 2
+bottom_morse_xi2 = 20
+bottom_morse_cutoff = 16
+
+# --- CIL ---
+cil_intensity = 0.005
+cil_wall_intensity = 0.05
+
+# --- ADHESION springs (alignment-gated, top surface). Long reach (2*radius = 36)
+#     for robust small-group recapture; moderate strength to avoid ejection. ---
+adhesion_strength = 2.5
+adhesion_radius = 18

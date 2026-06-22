@@ -27,6 +27,7 @@ function simulation_loop(p = Nothing, dom = Nothing, morse_potential_top = Nothi
         solution.theta[step] = Vector{Float64}(undef, p.num_cells)
         compute_hard_interaction_forces!(collective, p)
         compute_soft_interaction_forces!(collective, p, morse_potential_top, morse_potential_bottom)
+        compute_adhesion_forces!(collective, p)
         compute_stochastic_forces!(collective, p)
         compute_state_changes!(collective,p)
         update_cell_collective!(collective, p)

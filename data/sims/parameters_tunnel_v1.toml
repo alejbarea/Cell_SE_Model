@@ -1,0 +1,103 @@
+# ============================================================================
+# RIGHTWARD-TRAVEL set (new model: repulsive Morse + alignment-gated adhesion springs).
+# Priority: the BIG group migrates rightward down a tight tunnel. Small/medium-group
+# cohesion is intentionally sacrificed for this (see parameters_cohesive.toml for the
+# cohesion-first alternative).
+#
+# Default scenario below = the tight tunnel showcase (300 cells, 1200x80, seeded at
+# the left wall). scripts/render_scenarios.jl and scripts/scan_metrics.jl sweep the
+# scenario fields over this same physics block.
+#
+# WHY THIS TRAVELS RIGHT (with the thetabar typo now FIXED):
+#   1. LEFT-WALL PUMP: cells touching the left wall get thetabar += (1,0), so they
+#      polarise and run +x off the wall.
+#   2. TRAJECTORY PERSISTENCE: once a cell is isolated (no neighbours, off the wall)
+#      thetabar = its own heading -> zero alignment torque -> it KEEPS its current
+#      heading (only angular noise). So a cell kicked rightward by the wall persists
+#      rightward instead of being re-randomised. Cells that wander left eventually
+#      hit the wall and get pumped right again. Net: robust +x invasion.
+#   Both drivers act on MOBILE / loosely-bound cells, NOT on a rigid cohesive bulk,
+#   so travel scales INVERSELY with cohesion -> adhesion is kept WEAK here.
+#
+# Behaviour: the band fills the tunnel from the left and its front advances right
+# (COM drift ~ +75..105 over total_time 200; leaders reach far down the tunnel).
+# It is a spreading flow, NOT a compact translating block: a strongly cohesive bulk
+# (adhesion_strength >= 2) resists the flow and the drift sign becomes random.
+#
+# Morse stays EXCLUSIVELY REPULSIVE (v0=0) -> no black-hole collapse possible.
+# ============================================================================
+
+# --- Domain (default = long tight tunnel) ---
+domain_width = 1200
+domain_height = 80
+
+# --- Simulation ---
+num_cells = 300
+dt = 0.05
+total_time = 200
+
+# --- Init region (full-height slab seeded against the LEFT wall) ---
+init_width = 380
+init_height = 80
+margin_width = 0
+margin_height = 0
+
+# --- Diffusion ---
+D_angle = 0.04
+D_position = 0.02
+
+# --- Polarity restoring torque. With the isolated-cell thetabar=(0,0) quirk this is
+#     what turns lone/edge cells toward +x; ~1 is enough (higher does not add drift). ---
+theta_alignment = 1.0
+
+# --- Run/tumble rates: x-sigmoid (left-biased pump) ---
+run_to_tumble_rate_min = 0.05
+run_to_tumble_rate_max = 0.6
+run_to_tumble_rate_function = "sigmoid"
+run_to_tumble_rate_allure = 0.01
+tumble_to_run_rate_min = 0.3
+tumble_to_run_rate_max = 1.5
+tumble_to_run_rate_function = "sigmoid"
+tumble_to_run_rate_allure = 0.01
+
+# --- Cell geometry ---
+cell_hard_radius = 5
+cell_soft_radius = 8
+
+# --- Internal cohesion spring (top <-> bottom of same cell) ---
+maximal_stretch = 30
+top_internal_pull_strength = 1.5
+bottom_internal_pull_strength = 1.5
+internal_cohesion_strength = 1   # legacy key, unused
+
+# --- Run speed. ~10 gives strong, robust rightward invasion; lower stalls it. ---
+run_speed_min = 10
+run_speed_max = 10
+run_speed_distribution = "constant"
+
+# --- Walls ---
+soft_boundary_potential_strength = 1.5
+hard_boundary_velocity_behaviour = "bounce"
+
+# --- TOP / BOTTOM Morse = REPULSION ONLY (v0 = 0): pure excluded volume. ---
+top_morse_u0 = 10
+top_morse_v0 = 0
+top_morse_xi1 = 3
+top_morse_xi2 = 6
+top_morse_cutoff = 16
+
+bottom_morse_u0 = 10
+bottom_morse_v0 = 0
+bottom_morse_xi1 = 2
+bottom_morse_xi2 = 20
+bottom_morse_cutoff = 16
+
+# --- CIL ---
+cil_intensity = 0.005
+cil_wall_intensity = 0.05
+
+# --- ADHESION springs (alignment-gated). WEAK on purpose: keeps cells mobile so the
+#     +x bias drives the whole population right. Raise toward 2.5 (see
+#     parameters_cohesive.toml) for tight clusters that DON'T travel. ---
+adhesion_strength = 1.5
+adhesion_radius = 14

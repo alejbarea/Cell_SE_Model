@@ -33,6 +33,11 @@ struct SimulationParameters <: Parameters
     bottom_internal_pull_strength::Float64
     cil_intensity::Float64
     cil_wall_intensity::Float64
+    adhesion_strength::Float64
+    adhesion_radius::Float64
+    chemotaxis_strength::Float64   # beta - 0 disables temporal (chemotactic) sensing
+    chemotaxis_dir_x::Float64      # chemoattractant gradient direction (x)
+    chemotaxis_dir_y::Float64      # chemoattractant gradient direction (y)
 end
 
 struct DomainSpecs <: Parameters
@@ -113,7 +118,7 @@ function update_cell_collective!(collective::CellCollective, p::SimulationParame
     # Update bottom and top coordinates
     collective.bottom .+= p.dt .* collective.forcesbottom
     collective.top .+= p.dt .* collective.forcestop
-    neighbour_mask = (length.(collective.neighboursbottom) .== 0) .& (collective.hitting_wall .== false)
+    neighbour_mask = (length.(collective.neighboursbottom) .== 0) .& (collective.hitting_wall .== false) .& (length.(collective.neighbourstop) .== 0) # Only align to thetabar if no neighbours and not hitting a wall
     collective.thetabar[neighbour_mask] .= SVector.(cos.(collective.theta[neighbour_mask]), sin.(collective.theta[neighbour_mask]))    # Update theta only where state == 0
     mask = collective.state .== 0
     thetabar_angle_conversion = atan.(getindex.(collective.thetabar, 2), getindex.(collective.thetabar, 1))
@@ -190,7 +195,7 @@ function compute_soft_interaction_forces!(collective::CellCollective, p::Simulat
             distance_top = norm(distance_vector_top)
             unit_vector_bottom = distance_vector_bottom / distance_bottom
             unit_vector_top = distance_vector_top / distance_top
-            if distance_top < morse_potential_top.cutoff && distance_top > 2 * p.cell_hard_radius
+            if distance_top < morse_potential_top.cutoff
                 r_well = p.cell_hard_radius + p.cell_soft_radius
                 force_top = morse_interaction_forces(morse_potential_top, unit_vector_top, distance_top - r_well)
                 collective.forcestop[i] += force_top / 2
@@ -206,6 +211,23 @@ function compute_soft_interaction_forces!(collective::CellCollective, p::Simulat
     end
 end
 
+function compute_adhesion_forces!(collective::CellCollective, p::SimulationParameters)
+    for i in 1:p.num_cells
+        for j in i+1:p.num_cells
+            distance_vector_top = collective.top[i] - collective.top[j]
+            distance_top = norm(distance_vector_top)
+            unit_vector_top = distance_vector_top / distance_top
+            angular_deviation = abs(dot(unit_vector_top, SVector(cos(collective.theta[i]), sin(collective.theta[i]))))
+            cos35 = cos(35 * pi / 180)
+            if distance_top < 2*p.adhesion_radius && angular_deviation > cos35 # Only adhere if within adhesion radius and roughly aligned
+                force_magnitude = p.adhesion_strength * (2*p.adhesion_radius - distance_top)
+                force_top = force_magnitude * unit_vector_top
+                collective.forcestop[i] -= force_top / 2
+                collective.forcestop[j] += force_top / 2
+            end
+        end
+    end
+end
 
 function compute_stochastic_forces!(collective::CellCollective, p::SimulationParameters)
         for i in 1:p.num_cells
@@ -248,6 +270,22 @@ function compute_state_changes!(collective::CellCollective, p::SimulationParamet
         run_to_tumble_rate = compute_run_to_tumble_rate(collective.bottom[i][1], p)
         tumble_to_run_rate = compute_tumble_to_run_rate(collective.bottom[i][1], p)
         if collective.state[i] == 1
+            # --- Temporal (chemotactic) sensing, E. coli / NC style -------------
+            # The run direction is fixed during a run, so s = heading.grad_hat says
+            # whether THIS run climbs the gradient. Suppress tumbling on up-gradient
+            # runs (s>0 -> rate down -> longer run) and raise it on down-gradient
+            # runs (s<0 -> rate up -> shorter run) => net drift along the gradient.
+            # Replaces the old position-sigmoid steering (kept commented at file end).
+            if p.chemotaxis_strength != 0
+                grad = SVector(p.chemotaxis_dir_x, p.chemotaxis_dir_y)
+                gnorm = norm(grad)
+                if gnorm > eps()
+                    heading = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
+                    s = dot(heading, grad / gnorm)           # heading alignment, in [-1, 1]
+                    run_to_tumble_rate *= exp(-p.chemotaxis_strength * s)
+                end
+            end
+            # -------------------------------------------------------------------
             for j in collective.neighboursbottom[i]
                 distance_vector_bottom = collective.bottom[j] - collective.bottom[i]
                 distance_bottom = norm(distance_vector_bottom)
@@ -478,7 +516,13 @@ function read_parameters(filename::String)
         String(_toml_value(parameters, "hard_boundary_velocity_behaviour")),
         Float64(_toml_value(parameters, "bottom_internal_pull_strength")),
         Float64(_toml_value(parameters, "cil_intensity")),
-        Float64(_toml_value(parameters, "cil_wall_intensity"))
+        Float64(_toml_value(parameters, "cil_wall_intensity")),
+        Float64(_toml_value(parameters, "adhesion_strength")),
+        Float64(_toml_value(parameters, "adhesion_radius")),
+        # Temporal/chemotactic sensing — optional, default OFF so existing TOMLs are unchanged.
+        Float64(something(_toml_value(parameters, "chemotaxis_strength"), 0.0)),
+        Float64(something(_toml_value(parameters, "chemotaxis_dir_x"), 1.0)),
+        Float64(something(_toml_value(parameters, "chemotaxis_dir_y"), 0.0))
     )
 
     domain_specs = DomainSpecs(
@@ -504,4 +548,72 @@ function read_parameters(filename::String)
 
     return simulation_parameters, domain_specs, morse_potential_top, morse_potential_bottom
 end
+
+
+# =====================================================================================
+# PREVIOUS DIRECTIONAL MECHANISM — position-dependent SIGMOID run/tumble rates
+# (pre-chemotaxis). Kept commented for reference per request.
+#
+# How it worked: `compute_run_to_tumble_rate` / `compute_tumble_to_run_rate` (still
+# defined and live above) return a rate that depends on the cell's x-POSITION via a
+# sigmoid (`*_function = "sigmoid"`, steepness `*_allure`). The live
+# `compute_state_changes!` above is IDENTICAL to the version below EXCEPT it now also
+# multiplies `run_to_tumble_rate` by the chemotactic factor exp(-beta * heading.grad)
+# for running cells (temporal sensing).
+#
+# To revert to the old behaviour WITHOUT touching code: set `chemotaxis_strength = 0`
+# and set the rate `*_function = "sigmoid"` with the desired `*_allure` in the TOML
+# (the sigmoid helpers are untouched). The block below is the old function verbatim.
+#
+#= ---- previous compute_state_changes! (position-sigmoid, no chemotaxis) ------------
+function compute_state_changes!(collective::CellCollective, p::SimulationParameters)
+    for i in 1:p.num_cells
+        run_to_tumble_rate = compute_run_to_tumble_rate(collective.bottom[i][1], p)
+        tumble_to_run_rate = compute_tumble_to_run_rate(collective.bottom[i][1], p)
+        if collective.state[i] == 1
+            for j in collective.neighboursbottom[i]
+                distance_vector_bottom = collective.bottom[j] - collective.bottom[i]
+                distance_bottom = norm(distance_vector_bottom)
+                unit_vector_bottom = distance_vector_bottom / distance_bottom
+                cos35 = cos(35 * pi / 180)
+                speed_direction = SVector(cos(collective.theta[i]), sin(collective.theta[i]))
+                dot_product = dot(unit_vector_bottom, speed_direction)
+                run_to_tumble_rate += p.cil_intensity * (atan((dot_product - cos35) / 0.00001) + pi/2)
+            end
+
+            dist_left = collective.bottom[i][1]
+            dist_right = domain.domain_width - collective.bottom[i][1]
+            dist_bottom = collective.bottom[i][2]
+            dist_top = domain.domain_height - collective.bottom[i][2]
+            cos85_wall = cos(85 * pi / 180)
+
+            if dist_left < p.cell_soft_radius
+                dot_product_wall = -cos(collective.theta[i])
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+            if dist_right < p.cell_soft_radius
+                dot_product_wall = cos(collective.theta[i])
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+            if dist_bottom < p.cell_soft_radius
+                dot_product_wall = -sin(collective.theta[i])
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+            if dist_top < p.cell_soft_radius
+                dot_product_wall = sin(collective.theta[i])
+                run_to_tumble_rate += p.cil_wall_intensity * (atan((dot_product_wall - cos85_wall) / 0.00001) + pi/2)
+            end
+
+            collective.state_timer[i] -= p.dt * run_to_tumble_rate
+        else
+            collective.state_timer[i] -= p.dt * tumble_to_run_rate
+        end
+    end
+
+    mask = collective.state_timer .<= 0
+    collective.state[mask] .= 1 .- collective.state[mask]
+    exponential_dist = Exponential(1.0)
+    collective.state_timer[mask] .= rand(exponential_dist, sum(mask))
+end
+------------------------------------------------------------------------------------ =#
 

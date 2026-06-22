@@ -1,114 +1,119 @@
-# Epithelial-like loose cohesive cluster, drifting rightward.
+# ============================================================================
+# CHEMOTAXIS REGIME ("one to rule them all"): purely repulsive Morse + alignment-
+# gated adhesion springs + TEMPORAL (chemotactic) sensing for direction.
 #
-# Targets:
-#   - Hard core 4, soft halo extending to 8 (clear two-scale cell).
-#   - Preferred neighbour spacing ≈ 18–22 (about 2.2 × hard diameter): cohesive
-#     but not jammed; mimics the loose packing of migrating epithelial sheets.
-#   - Net population drift toward +x via x-dependent sigmoid run/tumble rates.
+# Directional drive is now per-cell and direction-based (not position-based):
+# compute_state_changes! multiplies the run->tumble rate by exp(-beta * heading.grad),
+# so up-gradient runs are extended and down-gradient runs cut short -> every cell
+# (interior ones too) drifts along the gradient, so a COHESIVE cluster can translate
+# as a unit. grad = (chemotaxis_dir_x, chemotaxis_dir_y), here (1,0) = rightward.
 #
-# Note: in the current loop order (simulation_logic.jl), `compute_hard_interaction_forces!`
-# populates neighboursbottom BEFORE `compute_state_changes!`, so cell-vs-cell CIL
-# IS active every step (in addition to wall CIL).
+# The OLD position-sigmoid steering is disabled (rates set to "constant") and kept
+# as a commented block at the bottom of this file and at the bottom of cell_model.jl.
+#
+# scan_metrics.jl overrides num_cells/domain_*/init_*/margin_*/total_time per scenario.
+# ============================================================================
 
-# Domain — long horizontal channel
-domain_width = 2000
-domain_height = 100
+# --- Domain (default = long tight tunnel) ---
+domain_width = 1600
+domain_height = 50
 
-# Simulation
-num_cells = 500
+# --- Simulation ---
+num_cells = 300
 dt = 0.05
-total_time = 100              # → 8000 steps
+total_time = 200
 
-# Init: seed a full-height sheet against the LEFT wall (margin 0) so the wall
-# polarises it +x and it drifts rightward down the channel. init_height spans the
-# whole channel — cells fill the entire cross-section. Touching the top/bottom
-# walls is fine; the goal is to keep the CENTRE populated too (not a hollow,
-# wall-hugging band) — handled by the "bounce" wall behaviour below.
-init_width = 500
-init_height = 100
-
+# --- Init region (slab seeded at the LEFT, room to migrate right) ---
+init_width = 600
+init_height = 50
 margin_width = 0
 margin_height = 0
 
-# Diffusion — small enough that ballistic runs dominate; lowered so the sheet
-# stays connected instead of melting during migration.
-D_angle = 0.08
+# --- Diffusion. D_angle is raised: tumbles must REORIENT enough that cells sample
+#     up-gradient headings for chemotaxis to bias them; too low and headings freeze. ---
+D_angle = 0.3
 D_position = 0.02
 
-# Polarity restoring torque (tumbling cells only) — a touch stronger for more
-# polar order while drifting.
-theta_alignment = 2.5
+# --- Polarity restoring torque (tumbling cells only). LOW so contacts don't scatter
+#     the group. ---
+theta_alignment = 1.0
 
-# Run-to-tumble rate: x-dependent sigmoid — HIGH near the left wall, LOW on the
-# right, so cells run long once headed right → net rightward drift.
-run_to_tumble_rate_min = 0.05
+# --- Run/tumble rates: CONSTANT base (no position steering); chemotaxis does the
+#     steering. min = the constant rate used; max/allure kept only so the file loads
+#     and so "sigmoid" can be re-enabled. run fraction ~ t->r/(t->r+r->t) ~ 0.67. ---
+run_to_tumble_rate_min = 0.5
 run_to_tumble_rate_max = 0.6
-run_to_tumble_rate_function = "sigmoid"
-run_to_tumble_rate_allure = 0.005   # gentle gradient so the bias reaches into the bulk
-
-# Tumble-to-run rate: x-dependent sigmoid — LOW at left, HIGH on the right.
-tumble_to_run_rate_min = 0.3
+run_to_tumble_rate_function = "constant"
+run_to_tumble_rate_allure = 0.01
+tumble_to_run_rate_min = 1.0
 tumble_to_run_rate_max = 1.5
-tumble_to_run_rate_function = "sigmoid"
-tumble_to_run_rate_allure = 0.005
+tumble_to_run_rate_function = "constant"
+tumble_to_run_rate_allure = 0.01
 
-# Two-scale cell: hard core 4, soft halo to 8
+# --- TEMPORAL / CHEMOTACTIC sensing. beta=0 disables (pure run/tumble). grad dir
+#     (1,0) = rightward. Bigger beta = stronger directional bias. ---
+chemotaxis_strength = 1.0
+chemotaxis_dir_x = 1.0
+chemotaxis_dir_y = 0.0
+
+# --- Cell geometry ---
 cell_hard_radius = 5
-cell_soft_radius = 15
+cell_soft_radius = 8
 
-# Cohesion spring (top ↔ bottom of the same cell)
-maximal_stretch = 30                 # natural extension ~8–10, snap branch never fires
+# --- Internal cohesion spring (top <-> bottom of same cell) ---
+maximal_stretch = 30
 top_internal_pull_strength = 1.5
 bottom_internal_pull_strength = 1.5
-internal_cohesion_strength = 1       # present-but-unused legacy key
+internal_cohesion_strength = 1   # legacy, unused
 
-# Run speed — moderate, slight heterogeneity for natural leader/follower sorting.
-run_speed_min = 30
-run_speed_max = 30
+# --- Run speed. 15 balances drift vs cohesion (higher disperses small groups). ---
+run_speed_min = 15
+run_speed_max = 15
 run_speed_distribution = "constant"
 
-# Walls. "bounce" reflects cells back INTO the channel at the top/bottom walls
-# instead of letting them slide along the wall ("tangential"). With ~90% of cells
-# running, tangential makes them stick to the top/bottom walls and the channel
-# CENTRE empties out (a hollow band); bounce keeps the whole cross-section
-# populated while the band still drifts right (left-wall bounce sends leftward
-# movers back to the right, preserving the rightward pump).
+# --- Walls ---
 soft_boundary_potential_strength = 1.5
-hard_boundary_velocity_behaviour = "tangential"   # "bounce" | "tangential" | "slide"
+hard_boundary_velocity_behaviour = "bounce"
 
-# Morse, TOP surface = cell–cell ADHESION (cadherin-like contact).
-# Shape: repulsive core at contact → shallow attractive well → nothing past the
-# cutoff. Active only for 2·hard_radius < d < cutoff (d_eff = d − 2·hard_radius),
-# so it fires ONLY in adhesive contact. F(contact) ≈ u₀−v₀ = 24 (firm core);
-# zero-force spacing d_eff* = ξ1ξ2/(ξ2−ξ1)·ln(u₀/v₀) ≈ 6 → top spacing ≈ 14.
-# CUTOFF kept short (just past the first neighbour shell): a deep/long-range
-# attractive well summed over many neighbours collapses the cluster (N-body),
-# so the well is shallow and local.
-top_morse_u0 = 20
-top_morse_v0 = 40
-top_morse_xi1 = 0.42
-top_morse_xi2 = 3
-top_morse_cutoff = 30
+# --- TOP Morse = REPULSION ONLY (v0 = 0). r_well = hard+soft = 13. ---
+top_morse_u0 = 10
+top_morse_v0 = 0
+top_morse_xi1 = 3
+top_morse_xi2 = 6
+top_morse_cutoff = 16
 
-# Morse, BOTTOM surface = SUBSTRATE SENSING (chemical/mechanical).
-# Shape: short-range repulsion + SLIGHT, longer-range attraction (cells recruit
-# each other across a few cell diameters). d_eff = d − 2·hard_radius (continuous
-# core from the hard radius — see compute_soft_interaction_forces!). LONGER range
-# than the top adhesion (cutoff 50 > 22) but NOT domain-spanning: truly
-# domain-wide attraction summed over hundreds of cells collapses the sheet to a
-# point. Tiny v₀ = slight; firm u₀ = short repulsion.
-bottom_morse_u0 = 30
-bottom_morse_v0 = 30
-bottom_morse_xi1 = 1
-bottom_morse_xi2 = 10
-bottom_morse_cutoff = 0
+# --- BOTTOM Morse = REPULSION ONLY (v0 = 0). r_well = 2*soft = 16. ---
+bottom_morse_u0 = 10
+bottom_morse_v0 = 0
+bottom_morse_xi1 = 2
+bottom_morse_xi2 = 20
+bottom_morse_cutoff = 16
 
-# CIL — contact inhibition of locomotion.
-# cil_intensity acts on cell neighbours and IS active every step:
-# compute_hard_interaction_forces! builds neighboursbottom before
-# compute_state_changes! reads it (see simulation_logic.jl loop order).
-# It makes running cells tumble when a neighbour sits in their forward 35° cone,
-# which promotes dispersal — kept modest here so cohesion is preserved.
-# cil_wall_intensity fires when bottom is within cell_soft_radius of a wall.
+# --- CIL ---
 cil_intensity = 0.005
 cil_wall_intensity = 0.05
+
+# --- ADHESION springs (alignment-gated, top surface). range = 2*adhesion_radius.
+#     2.5 holds the big sheet cohesive while chemotaxis drives it right; >=4 over-
+#     compacts the tops (no rest length) and can blow up the soft Morse. ---
+adhesion_strength = 1
+adhesion_radius = 16
+
+# ============================================================================
+# PREVIOUS SIGMOID (position-based) STEERING — kept for reference per request.
+# To use it instead of chemotaxis: set chemotaxis_strength = 0 and replace the
+# rate block above with the values below (function = "sigmoid").
+#
+#   run_to_tumble_rate_min = 0.05
+#   run_to_tumble_rate_max = 2.0
+#   run_to_tumble_rate_function = "sigmoid"
+#   run_to_tumble_rate_allure = -0.001
+#   tumble_to_run_rate_min = 0.1
+#   tumble_to_run_rate_max = 1.5
+#   tumble_to_run_rate_function = "sigmoid"
+#   tumble_to_run_rate_allure = -0.001
+#
+# (Negative allure = "run on the left, tumble/accumulate on the right" -> cohesive
+# but slow, left-wall-pinned spreading. Positive allure = fast dispersed invasion.
+# Neither moved a cohesive bulk as a unit; that is what the chemotaxis term adds.)
+# ============================================================================
